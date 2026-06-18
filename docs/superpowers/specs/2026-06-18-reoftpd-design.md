@@ -1,0 +1,292 @@
+# reoftpd — Append-Only FTP Archive for Reolink Cameras
+
+**Status:** Design approved (brainstorming complete)
+**Date:** 2026-06-18
+**Author:** alin.anton
+
+## 1. Purpose
+
+A small, hardened FTP server daemon that receives video clips and snapshots
+from Reolink cameras and stores them in an **append-only** archive. A client
+authenticated as a camera can create new files and directories but can never
+read, overwrite, rename, or delete anything. Footage is reviewed through
+**separate read-only accounts**. Files older than a configurable age (default
+30 days) are pruned by a trusted server-side sweep that runs outside the FTP
+path.
+
+## 2. Threat Model
+
+**Primary adversary:** someone who physically steals a camera, extracts its
+stored FTP credentials, and connects to the server to destroy the footage that
+incriminates them.
+
+**Guarantee:** with a camera's credentials a client can **only create new files
+and directories**. The server refuses — at the protocol level — every command
+that could delete, overwrite, rename, or read back existing data
+(`DELE`, `RMD`, `RNFR`/`RNTO`, `RETR`, and `STOR` onto an existing path). Each
+camera is jailed to its own home directory and cannot see or reach any other
+camera's folder.
+
+**Separation of duties:** upload and read are distinct credentials with
+disjoint, non-overlapping permissions.
+
+- A stolen **camera** credential → can blindly append to that one camera's
+  folder; cannot read *any* footage, cannot tamper, cannot reach other cameras.
+- A leaked **viewer** credential → can read footage in its scope
+  (confidentiality loss) but **cannot tamper** — archive integrity is
+  preserved.
+
+Confidentiality and integrity therefore fail independently.
+
+**Out of scope (explicitly):** an attacker with shell/root on the server, or
+physical access to the disks. Retention deletion is a trusted server-side
+process deliberately outside the FTP path.
+
+## 3. Technology Choice
+
+- **Engine:** `pyftpdlib` (MIT, pure Python) — provides a per-user authorizer
+  with granular permission flags, per-user chroot jailing, and FTPS/TLS.
+- **TLS:** `pyOpenSSL` (required by pyftpdlib for FTPS).
+- **Password hashing:** `argon2-cffi` (argon2id) when available, with a
+  stdlib **PBKDF2-HMAC-SHA256** fallback (see §7).
+- **Config parsing:** stdlib `tomllib` (Python 3.11+) with `tomli` fallback on
+  3.8–3.10.
+
+Pure-Python core so the daemon installs on any Unix with Python 3.8+
+(Linux, *BSD, macOS).
+
+### Alternatives rejected
+- **Harden vsftpd directly** — solid, but its config cannot reject *overwrites*
+  (only whole commands via `cmds_denied`), and per-camera foldering + retention
+  + scoped read accounts would be bolted-on scripts. Less cohesive, less
+  portable.
+- **Raw-socket FTP server from scratch** — re-implementing FTP + TLS securely
+  is a large attack surface to audit for no gain over pyftpdlib.
+
+## 4. Account & Access Model
+
+The config file `reoftpd.toml` is the **single source of truth**. No separate
+user database.
+
+### 4.1 Upload accounts (cameras) — one per camera
+- Exactly one password per camera. Append-only. Jailed to the camera's folder.
+- Permission set `e l m w` (cwd, list, mkdir, store). Withholds
+  `a d f r M T` (no append-to-existing, delete, rename, **read**, chmod, mtime).
+- Plus the no-overwrite `STOR` override (§5).
+
+### 4.2 Viewer accounts (readers) — separate and explicit
+- Independent accounts; **not** bound to a camera. Created only as needed.
+- Permission set `e l r` (cwd, list, retrieve). Strictly read-only.
+- Each viewer has a `scope`: `"all"`, a single camera, or a list mixing camera
+  names and group names.
+
+### 4.3 Groups
+- Pure sugar: a named list of camera names, expanded at config load. Not a
+  first-class entity.
+
+### 4.4 Name vs username (cameras)
+- **`name`** — stable internal identity: the folder name in the archive, the
+  token viewers reference in `scope`, the label in logs. Never changes
+  (renaming would orphan data).
+- **`username`** — the FTP login the camera sends. **Defaults to `name`**,
+  overridable to decouple login from folder name (rename logins without moving
+  data; non-obvious logins).
+
+### 4.5 Example config
+
+```toml
+[server]
+listen = "0.0.0.0"
+port = 21
+passive_ports = [50000, 50100]
+tls_cert = "/etc/reoftpd/cert.pem"   # optional; enables opportunistic FTPS
+tls_key  = "/etc/reoftpd/key.pem"
+
+[archive]
+root = "/srv/reolink"
+retention_days = 30
+
+# --- upload identities: one per camera, append-only ---
+[[camera]]
+name = "front-door"
+username = "cam-fd-7q2"              # optional; defaults to name
+upload_password_hash = "$argon2id$v=19$m=19456,t=2,p=1$..."
+require_tls = true
+
+[[camera]]
+name = "driveway"
+upload_password_hash = "$argon2id$v=19$m=19456,t=2,p=1$..."
+
+# --- named groups: sugar for a list of camera names ---
+[group]
+outdoor = ["driveway", "back-yard", "side-gate"]
+
+# --- read identities: read-only, scoped ---
+[[viewer]]
+name = "admin"
+password_hash = "$argon2id$v=19$..."
+scope = "all"
+
+[[viewer]]
+name = "patio-review"
+password_hash = "$argon2id$v=19$..."
+scope = ["outdoor", "front-door"]   # group + camera names, deduped
+```
+
+## 5. Append-Only Enforcement (two independent layers)
+
+1. **Permission set.** The authorizer grants uploaders exactly `e l m w` and
+   withholds `a d f r M T`. pyftpdlib rejects the withheld commands before any
+   filesystem call.
+2. **No-overwrite `STOR`.** `handler.py` overrides `ftp_STOR`: if the resolved
+   target path already exists (and is not a quarantined test file), it returns
+   `550` and refuses. Closes the one gap the permission flags leave open.
+
+## 6. Read Scoping — `ScopedReadOnlyFS`
+
+A subclass of pyftpdlib's `AbstractedFS` delivers viewer scopes:
+
+- `scope = "all"` → simple jail at `[archive].root`.
+- `scope = ["one-camera"]` → simple jail at that camera's dir.
+- `scope` spanning multiple cameras/groups → a **synthesized virtual root**:
+  listing `/` shows only the allowed camera names; `/<cam>/...` maps to the
+  real directory; `validpath` asserts every resolved real path stays inside one
+  of the allowed roots. `../` traversal is blocked by the realpath check;
+  symlinks are rejected because realpath would resolve them outside the allowed
+  roots. Read-only is doubly guaranteed — by the `e l r` permission set and by
+  the FS exposing no write operations.
+
+## 7. Password Hashing
+
+- **Default:** argon2id via `argon2-cffi`, OWASP parameters
+  (`m=19456 KiB, t=2, p=1`). Output is a self-describing PHC string
+  (`$argon2id$v=19$...`).
+- **Fallback:** stdlib PBKDF2-HMAC-SHA256, stored as a self-describing string
+  (`pbkdf2_sha256$<iters>$<salt>$<hash>`). Used where `argon2-cffi` cannot be
+  installed (e.g. exotic *BSD without a C toolchain).
+- **Verification** auto-selects the verifier by the stored string's prefix, so
+  a deployment can mix hash types. `reoftpd hash-password` emits argon2id
+  whenever the library is present.
+
+Rationale for argon2id over argon2i: argon2i is side-channel-hardened but
+weaker against GPU/ASIC and time-memory trade-off attacks — exactly the
+offline cracking risk if the config/backup leaks. argon2id is the hybrid
+recommended by RFC 9106 and OWASP for password storage.
+
+## 8. Transport Security
+
+- **Opportunistic FTPS.** If `tls_cert`/`tls_key` are configured, the server
+  advertises `AUTH TLS` and uses it when the camera offers it, falling back to
+  plain FTP otherwise.
+- **Per-account `require_tls = true`** forces TLS for cameras (and viewers)
+  that support it; a non-TLS login for such an account is rejected after
+  authentication.
+- `reoftpd gencert` produces a self-signed cert. The passive-port range is
+  configurable and must be opened in the firewall (documented).
+
+## 9. Foldering
+
+Trust the camera's path, sandboxed. Each camera authenticates into its own
+jailed home (`[archive].root/<name>/`) and creates its native `<...>/<date>/`
+tree via `MKD`. The server does not rewrite paths. The jail guarantees the
+camera cannot escape its home even with `../`.
+
+## 10. Reolink Test-File Handling
+
+On "Test", Reolink uploads a probe file, often repeatedly, which strict
+append-only would reject and surface as "FTP test failed". The handler detects
+Reolink's test-filename pattern and routes those writes to a per-camera
+`.quarantine/` area where overwrite **is** allowed, so the camera's Test
+button succeeds. Quarantined files are excluded from the archive and cleaned
+aggressively (short TTL). Real captures remain strictly append-only.
+
+## 11. Retention
+
+`retention.py` is a separate trusted process — **not** reachable over FTP, so
+append-only never blocks legitimate cleanup.
+
+- Deletes files whose mtime exceeds `retention_days` (default 30).
+- Prunes emptied directories.
+- Cleans `.quarantine/` on a short TTL.
+- Logs every deletion. Supports `--dry-run`.
+- Shipped as a `systemd` timer (daily); on non-systemd hosts run
+  `reoftpd cleanup --once` from cron.
+
+## 12. Privilege Model
+
+FTP requires the privileged port 21. Two supported modes:
+
+- **systemd (recommended):** `AmbientCapabilities=CAP_NET_BIND_SERVICE` +
+  `User=reoftpd` so the daemon never runs as root, plus `NoNewPrivileges`,
+  `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, a read-only filesystem
+  except the archive dir, and syscall filtering.
+- **portable:** start as root only to `bind()`, then immediately `setuid` to a
+  dedicated unprivileged user before serving.
+
+## 13. Logging & Observability
+
+Structured logs to stdout/journald: authentications (success/fail), every
+upload, and — importantly — every **rejected delete/overwrite/rename attempt**
+with the username and path. Makes tamper attempts auditable and is
+fail2ban-friendly for brute-force lockout.
+
+## 14. Package Layout
+
+```
+reoftpd/
+  __init__.py
+  config.py       load + validate TOML; expand groups; build account objects
+  authorizer.py   hashed-password authorizer; per-user perms; require_tls
+  handler.py      FTPHandler subclass: no-overwrite STOR, test-file quarantine,
+                  logging hooks
+  fs.py           ScopedReadOnlyFS (multi-root virtual filesystem for viewers)
+  hashing.py      argon2id + pbkdf2 hashing/verification, PHC-style strings
+  server.py       wire TLS, bind, drop privileges, SIGHUP reload, signals, run
+  retention.py    age-based sweep
+  cli.py          serve | cleanup | add-camera | add-viewer | hash-password |
+                  gencert
+config/reoftpd.example.toml
+packaging/
+  reoftpd.service
+  reoftpd-cleanup.service
+  reoftpd-cleanup.timer
+tests/
+pyproject.toml
+```
+
+## 15. CLI
+
+- `reoftpd serve [--config PATH]`
+- `reoftpd cleanup [--once] [--dry-run] [--config PATH]`
+- `reoftpd add-camera <name> [--username U] [--require-tls]` — prompts for
+  password, appends a hashed `[[camera]]` entry.
+- `reoftpd add-viewer <name> --scope all|cam,grp,...` — appends a hashed
+  `[[viewer]]` entry.
+- `reoftpd hash-password` — emit an argon2id (or pbkdf2 fallback) hash.
+- `reoftpd gencert` — self-signed cert/key for FTPS.
+- `SIGHUP` reloads accounts without dropping live transfers.
+
+## 16. Testing (TDD)
+
+Unit tests:
+- no-overwrite `STOR` logic
+- uploader vs viewer permission sets
+- argon2id + pbkdf2 hashing/verification and prefix auto-selection
+- test-file quarantine routing
+- jail escape attempts (`../`, symlinks) for both single-root and
+  `ScopedReadOnlyFS`
+- retention age calculation and empty-dir pruning
+- config loading, group expansion, name/username defaulting, scope validation
+
+Integration test: spin up the server on a high port and drive it with a real
+FTP client to confirm:
+- `STOR` of a new file succeeds
+- `STOR` onto an existing path is refused
+- `DELE`, `RMD`, `RNFR/RNTO`, `RETR` are refused for an uploader
+- a viewer can `RETR`/`LIST` within scope and cannot reach out-of-scope cameras
+- a viewer cannot `STOR`/`DELE`
+
+## 17. Dependencies
+
+`pyftpdlib`, `pyOpenSSL`, `argon2-cffi` (optional but default), `tomli`
+(only on Python < 3.11). Deliberately small surface.
