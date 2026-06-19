@@ -205,6 +205,35 @@ On any violation (overlap, gap, or a write to a finalized file), the server:
 3. **Discards** the partial staging data produced by that attempt, leaving no
    half-written residue.
 
+### 5.6 Offset validation & transfer-mode lock-down
+
+In FTP **stream mode** a store is one contiguous byte stream beginning at the
+restart offset, so the only overlap vector inside a transfer is that start
+offset; across transfers it is the start offset of each subsequent store. Both
+candidate engines expose the offset at store time, so §5.3 is enforceable:
+
+- **`libunftp` (Rust):** the storage backend's `put(user, input, path,
+  start_pos: u64)` receives the offset as `start_pos`. The backend `stat`s the
+  staging target and enforces `start_pos == existing_size`. A **negative offset
+  is impossible** — `start_pos` is `u64` and libunftp's `REST` parser rejects a
+  non-numeric/negative argument before `put` is called.
+- **`pyftpdlib` (Python):** the offset is `self._restart_position`, readable in
+  the `ftp_STOR` override; `ftp_REST` already rejects negatives at the protocol
+  layer (`501 Invalid parameter`).
+
+Regardless of engine the handler also:
+
+1. **Re-validates the offset defensively** — rejects any offset that is
+   negative or not a whole number, independent of the engine's own parsing.
+2. **Blocks cumulative overlap across cycles** — every `REST`+`STOR` cycle
+   re-checks `start == current size`; once a file is finalized (§5.4) it is
+   frozen and refuses writes at any offset.
+3. **Locks the transfer mode** — forces `MODE S` (stream) + `STRU F` (file) and
+   rejects `MODE B`/`MODE C` (block/compressed) and `STRU R`/`P` (record/page),
+   which carry their own restart markers and could express discontiguous
+   writes. (Both engines already restrict to stream/file; this makes the
+   guarantee explicit.)
+
 ## 6. Read Scoping — `ScopedReadOnlyFS`
 
 A subclass of pyftpdlib's `AbstractedFS` delivers viewer scopes:
