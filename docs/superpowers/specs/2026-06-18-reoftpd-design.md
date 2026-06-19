@@ -133,14 +133,77 @@ password_hash = "$argon2id$v=19$..."
 scope = ["outdoor", "front-door"]   # group + camera names, deduped
 ```
 
-## 5. Append-Only Enforcement (two independent layers)
+## 5. Append-Only Enforcement
 
-1. **Permission set.** The authorizer grants uploaders exactly `e l m w` and
-   withholds `a d f r M T`. pyftpdlib rejects the withheld commands before any
-   filesystem call.
-2. **No-overwrite `STOR`.** `handler.py` overrides `ftp_STOR`: if the resolved
-   target path already exists (and is not a quarantined test file), it returns
-   `550` and refuses. Closes the one gap the permission flags leave open.
+Append-only is enforced at the **byte level**: a write may only extend a file
+at its current end, never land on bytes that already exist, and a *completed*
+file is frozen immutable.
+
+### 5.1 The write surface
+
+Every FTP command that can place bytes on disk must be policed, not just
+`STOR`:
+
+| Command | Disposition |
+|---|---|
+| `STOR` | allowed via the `w` permission, then gated by the rules below |
+| `STOU` | allowed via `w` (server picks a unique name); same rules applied |
+| `APPE` | **denied** — the `a` flag is withheld, so pyftpdlib rejects it before any filesystem call (Reolink never uses it; resume is handled via `STOR`+`REST`) |
+| `REST <n>` | accepted only as a transfer offset that satisfies the non-overlap rule below; otherwise the following store is rejected |
+
+Note: "append-only" names the *archive* property (it only grows). It does
+**not** mean the FTP `APPE` command is permitted — `APPE` mutates a file in
+place and is denied.
+
+### 5.2 Permission set (layer 1)
+
+The authorizer grants uploaders exactly `e l m w` (cwd, list, mkdir, store) and
+withholds `a d f r M T`. pyftpdlib rejects the withheld commands — including
+`APPE`, `DELE`, `RMD`, `RNFR/RNTO`, `RETR` — before any filesystem call.
+
+### 5.3 Non-overlap rule (layer 2)
+
+`handler.py` computes the **start offset** of each store:
+
+- `REST <n>` before the transfer → `start = n`
+- plain `STOR`/`STOU` → `start = 0`
+
+Let `existing` = the current size of the staging target (0 if absent). The
+store is permitted **only if `start == existing`**:
+
+- `start < existing` → would **overlap existing bytes** → reject `550`.
+- `start > existing` → would leave a sparse **gap** → reject `550`.
+- new file → `existing == 0`, so only `start == 0` is allowed.
+
+This permits resuming a dropped upload (re-`STOR` with `REST == partial size`)
+while making it impossible to rewrite any byte already stored.
+
+### 5.4 Stage-then-finalize (completed-file immutability)
+
+To stop a client appending bytes to the *end* of an already-finished clip,
+completed files are frozen:
+
+1. Each upload streams to an internal **staging file** (e.g.
+   `<final>.reoftpd-partial` in the target dir, hidden from listings).
+2. The non-overlap rule (§5.3) is enforced against the staging file's current
+   size, so resume extends the staging file and never overlaps.
+3. When the data connection closes successfully, the server **atomically
+   renames** the staging file to the final name and freezes it.
+4. Any subsequent store targeting an **already-finalized name is refused**
+   (any offset) — completed clips are immutable.
+
+Because Reolink uses fresh timestamped filenames and whole-file `STOR`, this is
+invisible to the camera.
+
+### 5.5 Violation handling
+
+On any violation (overlap, gap, or a write to a finalized file), the server:
+
+1. Refuses with `550`.
+2. **Logs a tamper event** with username, path, attempted offset, and existing
+   size.
+3. **Discards** the partial staging data produced by that attempt, leaving no
+   half-written residue.
 
 ## 6. Read Scoping — `ScopedReadOnlyFS`
 
@@ -208,6 +271,8 @@ append-only never blocks legitimate cleanup.
 - Deletes files whose mtime exceeds `retention_days` (default 30).
 - Prunes emptied directories.
 - Cleans `.quarantine/` on a short TTL.
+- Cleans **orphaned staging files** (`*.reoftpd-partial`) abandoned by
+  interrupted uploads after a short TTL.
 - Logs every deletion. Supports `--dry-run`.
 - Shipped as a `systemd` timer (daily); on non-systemd hosts run
   `reoftpd cleanup --once` from cron.
@@ -269,7 +334,13 @@ pyproject.toml
 ## 16. Testing (TDD)
 
 Unit tests:
-- no-overwrite `STOR` logic
+- non-overlap rule: `start == existing` permitted; `start < existing` (overlap)
+  and `start > existing` (gap) rejected; new-file requires offset 0
+- `REST`-driven resume of a staging file extends without overlap
+- stage-then-finalize: atomic rename on success; any store to a finalized name
+  refused at any offset (completed-file immutability)
+- `STOU` subjected to the same rules; `APPE` denied by permission
+- violation handling: `550` + tamper log + staging data discarded
 - uploader vs viewer permission sets
 - argon2id + pbkdf2 hashing/verification and prefix auto-selection
 - test-file quarantine routing
@@ -280,9 +351,11 @@ Unit tests:
 
 Integration test: spin up the server on a high port and drive it with a real
 FTP client to confirm:
-- `STOR` of a new file succeeds
-- `STOR` onto an existing path is refused
-- `DELE`, `RMD`, `RNFR/RNTO`, `RETR` are refused for an uploader
+- `STOR` of a new file succeeds and is finalized atomically
+- `STOR` onto a finalized name is refused (no overwrite, no tail-append)
+- `REST`+`STOR` resuming an interrupted upload succeeds; `REST` into existing
+  bytes is refused
+- `DELE`, `RMD`, `RNFR/RNTO`, `RETR`, `APPE` are refused for an uploader
 - a viewer can `RETR`/`LIST` within scope and cannot reach out-of-scope cameras
 - a viewer cannot `STOR`/`DELE`
 
