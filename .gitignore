@@ -4,5 +4,6 @@ __pycache__/
 .venv/
 dist/
 build/
+/target
 /etc-local/
 *.pem
