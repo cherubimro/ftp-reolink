@@ -28,19 +28,43 @@ fn normalize(virtual_path: &Path) -> Result<Vec<String>, PathError> {
     Ok(out)
 }
 
-/// Final guard: canonicalized real path must stay within `base`.
+/// Final guard: the real path the request resolves to must stay within `base`.
+/// Resolves symlinks by canonicalizing the longest existing ancestor and
+/// re-joining the (non-existent) tail, so a symlinked intermediate directory
+/// cannot escape the jail even when the leaf does not yet exist.
 fn contained(base: &Path, candidate: &Path) -> Result<PathBuf, PathError> {
     let base_c = base.canonicalize().map_err(|_| PathError::NotFound)?;
-    // Canonicalize the existing ancestor, then re-join the non-existent tail,
-    // so resolution also defeats symlink escapes.
-    let resolved = match candidate.canonicalize() {
-        Ok(p) => p,
-        Err(_) => candidate.to_path_buf(),
-    };
-    if resolved.starts_with(&base_c) {
-        Ok(resolved)
-    } else {
-        Err(PathError::Traversal)
+
+    // Fast path: the whole candidate exists — canonicalize resolves every symlink.
+    if let Ok(resolved) = candidate.canonicalize() {
+        return if resolved.starts_with(&base_c) {
+            Ok(resolved)
+        } else {
+            Err(PathError::Traversal)
+        };
+    }
+
+    // Slow path: the leaf (or a deeper component) does not exist. Canonicalize
+    // the longest existing ancestor — which resolves any symlinks within it —
+    // then re-attach the non-existent tail and check containment.
+    let mut ancestor = candidate.to_path_buf();
+    let mut tail = PathBuf::new();
+    loop {
+        if let Ok(canon) = ancestor.canonicalize() {
+            let resolved = canon.join(&tail);
+            return if resolved.starts_with(&base_c) {
+                Ok(resolved)
+            } else {
+                Err(PathError::Traversal)
+            };
+        }
+        match ancestor.file_name() {
+            Some(name) => {
+                tail = Path::new(name).join(&tail);
+                ancestor.pop();
+            }
+            None => return Err(PathError::NotFound),
+        }
     }
 }
 
@@ -129,5 +153,30 @@ mod tests {
         roots.insert("front-door".to_string(), cam);
         let m = ScopeMap::multi(roots);
         assert_eq!(m.resolve(std::path::Path::new("/driveway/x")).unwrap_err(), PathError::OutsideScope);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_escape_existing_target() {
+        let (_d, cam) = fixture();
+        let outside = tempfile::tempdir().unwrap(); // unambiguously outside the jail
+        std::os::unix::fs::symlink(outside.path(), cam.join("escape")).unwrap();
+        let m = ScopeMap::single(cam);
+        // Resolving the symlink itself must escape -> Traversal.
+        assert_eq!(m.resolve(std::path::Path::new("/escape")).unwrap_err(), PathError::Traversal);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_escape_nonexistent_leaf() {
+        let (_d, cam) = fixture();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), cam.join("escape")).unwrap();
+        let m = ScopeMap::single(cam);
+        // A non-existent leaf behind the symlink must STILL be rejected (the bug).
+        assert_eq!(
+            m.resolve(std::path::Path::new("/escape/definitely-not-here-1234")).unwrap_err(),
+            PathError::Traversal
+        );
     }
 }
