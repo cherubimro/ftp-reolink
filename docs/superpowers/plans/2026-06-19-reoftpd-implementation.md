@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **MSRV:** Rust **1.85.0** (libunftp 0.23 requirement). Pin via `rust-toolchain.toml`.
+- **MSRV:** Rust **1.88** (libunftp 0.23 uses let-chains, which require 1.88). Toolchain pinned to **1.96.0** via `rust-toolchain.toml` (the installed stable). Reflected in `Cargo.toml` `rust-version = "1.88"`.
 - **Crates (pinned minor):** `libunftp = "0.23"`, `tokio = { version = "1", features = ["full"] }`, `argon2 = "0.5"`, `password-hash = "0.5"`, `serde = { version = "1", features = ["derive"] }`, `toml = "0.8"`, `clap = { version = "4", features = ["derive"] }`, `tracing = "0.1"`, `tracing-subscriber = "0.3"`, `nix = { version = "0.29", features = ["user", "signal"] }`, `rcgen = "0.13"`, `governor = "0.6"`. Dev: `suppaftp = "6"`, `tempfile = "3"`.
 - **Memory safety:** no `unsafe` blocks in our code; add `#![forbid(unsafe_code)]` to `main.rs`/`lib.rs`.
 - **Argon2 params:** argon2id, `m = 19456` KiB, `t = 2`, `p = 1` (OWASP). PHC string output (`$argon2id$v=19$...`).

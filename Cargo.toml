@@ -2,7 +2,7 @@
 name = "reoftpd"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [lib]
 name = "reoftpd"
@@ -13,7 +13,7 @@ name = "reoftpd"
 path = "src/main.rs"
 
 [dependencies]
-libunftp = "0.20"
+libunftp = "0.23"
 tokio = { version = "1", features = ["full"] }
 argon2 = "0.5"
 password-hash = { version = "0.5", features = ["std"] }
