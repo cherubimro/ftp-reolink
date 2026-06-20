@@ -28,10 +28,12 @@ pub fn staging_path(final_path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Reolink uploads a probe file named like `test.*` / `TestFtp*` on "Test".
+/// Reolink's FTP connection test uploads a probe named exactly `test`,
+/// `test.<ext>` (e.g. test.txt/test.jpg), or `testftp*`. Match narrowly so a
+/// real capture is never mistaken for a probe and silently quarantined.
 pub fn is_reolink_test_file(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    lower.starts_with("test")
+    lower == "test" || lower.starts_with("test.") || lower.starts_with("testftp")
 }
 
 #[cfg(test)]
@@ -66,6 +68,9 @@ mod tests {
     fn detects_reolink_test_file() {
         assert!(is_reolink_test_file("test.txt"));
         assert!(is_reolink_test_file("TestFtp.dat"));
+        assert!(is_reolink_test_file("test"));
+        assert!(!is_reolink_test_file("testament.mp4"));
+        assert!(!is_reolink_test_file("testudo.mp4"));
         assert!(!is_reolink_test_file("MD_2026-06-19_120000.mp4"));
     }
 }
