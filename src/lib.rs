@@ -11,6 +11,7 @@ pub mod auth;
 pub mod backend;
 pub mod tls;
 pub mod server;
+pub mod cli;
 
 #[cfg(test)]
 mod tests {
