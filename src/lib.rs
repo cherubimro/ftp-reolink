@@ -10,6 +10,7 @@ pub mod retention;
 pub mod auth;
 pub mod backend;
 pub mod tls;
+pub mod server;
 
 #[cfg(test)]
 mod tests {

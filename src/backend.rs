@@ -578,6 +578,102 @@ impl StorageBackend<ReoUser> for ReoBackend {
 }
 
 // ---------------------------------------------------------------------------
+// Stub impl required only to satisfy ServerBuilder::with_authenticator's
+// StorageBackend<DefaultUser> bound.
+//
+// `ServerBuilder::with_authenticator` is only implemented for `DefaultUser`
+// and requires `Storage: StorageBackend<DefaultUser>`. After calling
+// `.user_detail_provider(provider)` the builder's `User` type parameter
+// switches to `ReoUser` — so no `DefaultUser` connection is ever served.
+// These methods are therefore never called at runtime; all return
+// PermissionDenied so that any hypothetical invocation is safe by default.
+// ---------------------------------------------------------------------------
+
+#[async_trait]
+impl StorageBackend<unftp_core::auth::DefaultUser> for ReoBackend {
+    type Metadata = Meta;
+
+    async fn metadata<P: AsRef<std::path::Path> + Send + std::fmt::Debug>(
+        &self,
+        _u: &unftp_core::auth::DefaultUser,
+        _p: P,
+    ) -> unftp_core::storage::Result<Self::Metadata> {
+        Err(unftp_core::storage::ErrorKind::PermissionDenied.into())
+    }
+
+    async fn list<P: AsRef<std::path::Path> + Send + std::fmt::Debug>(
+        &self,
+        _u: &unftp_core::auth::DefaultUser,
+        _p: P,
+    ) -> unftp_core::storage::Result<Vec<unftp_core::storage::Fileinfo<std::path::PathBuf, Self::Metadata>>>
+    where
+        <Self as StorageBackend<unftp_core::auth::DefaultUser>>::Metadata: unftp_core::storage::Metadata,
+    {
+        Err(unftp_core::storage::ErrorKind::PermissionDenied.into())
+    }
+
+    async fn get<P: AsRef<std::path::Path> + Send + std::fmt::Debug>(
+        &self,
+        _u: &unftp_core::auth::DefaultUser,
+        _p: P,
+        _s: u64,
+    ) -> unftp_core::storage::Result<Box<dyn tokio::io::AsyncRead + Send + Sync + Unpin>> {
+        Err(unftp_core::storage::ErrorKind::PermissionDenied.into())
+    }
+
+    async fn put<P: AsRef<std::path::Path> + Send + std::fmt::Debug, R: tokio::io::AsyncRead + Send + Sync + Unpin + 'static>(
+        &self,
+        _u: &unftp_core::auth::DefaultUser,
+        _i: R,
+        _p: P,
+        _s: u64,
+    ) -> unftp_core::storage::Result<u64> {
+        Err(unftp_core::storage::ErrorKind::PermissionDenied.into())
+    }
+
+    async fn del<P: AsRef<std::path::Path> + Send + std::fmt::Debug>(
+        &self,
+        _u: &unftp_core::auth::DefaultUser,
+        _p: P,
+    ) -> unftp_core::storage::Result<()> {
+        Err(unftp_core::storage::ErrorKind::PermissionDenied.into())
+    }
+
+    async fn mkd<P: AsRef<std::path::Path> + Send + std::fmt::Debug>(
+        &self,
+        _u: &unftp_core::auth::DefaultUser,
+        _p: P,
+    ) -> unftp_core::storage::Result<()> {
+        Err(unftp_core::storage::ErrorKind::PermissionDenied.into())
+    }
+
+    async fn rename<P: AsRef<std::path::Path> + Send + std::fmt::Debug>(
+        &self,
+        _u: &unftp_core::auth::DefaultUser,
+        _f: P,
+        _t: P,
+    ) -> unftp_core::storage::Result<()> {
+        Err(unftp_core::storage::ErrorKind::PermissionDenied.into())
+    }
+
+    async fn rmd<P: AsRef<std::path::Path> + Send + std::fmt::Debug>(
+        &self,
+        _u: &unftp_core::auth::DefaultUser,
+        _p: P,
+    ) -> unftp_core::storage::Result<()> {
+        Err(unftp_core::storage::ErrorKind::PermissionDenied.into())
+    }
+
+    async fn cwd<P: AsRef<std::path::Path> + Send + std::fmt::Debug>(
+        &self,
+        _u: &unftp_core::auth::DefaultUser,
+        _p: P,
+    ) -> unftp_core::storage::Result<()> {
+        Err(unftp_core::storage::ErrorKind::PermissionDenied.into())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helper: check if a ScopeMap is single-root (no multi-camera synthesis needed)
 // ---------------------------------------------------------------------------
 
