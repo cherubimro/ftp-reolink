@@ -7,6 +7,7 @@ pub mod config;
 pub mod account;
 pub mod limits;
 pub mod retention;
+pub mod auth;
 
 #[cfg(test)]
 mod tests {

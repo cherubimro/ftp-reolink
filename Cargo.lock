@@ -1269,6 +1269,7 @@ name = "reoftpd"
 version = "0.1.0"
 dependencies = [
  "argon2",
+ "async-trait",
  "clap",
  "governor",
  "libunftp",
@@ -1282,6 +1283,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "unftp-core",
 ]
 
 [[package]]

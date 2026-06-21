@@ -14,6 +14,8 @@ path = "src/main.rs"
 
 [dependencies]
 libunftp = "0.23"
+unftp-core = "0.1"
+async-trait = "0.1"
 tokio = { version = "1", features = ["full"] }
 argon2 = "0.5"
 password-hash = { version = "0.5", features = ["std", "getrandom"] }
