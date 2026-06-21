@@ -16,7 +16,7 @@ path = "src/main.rs"
 libunftp = "0.23"
 tokio = { version = "1", features = ["full"] }
 argon2 = "0.5"
-password-hash = { version = "0.5", features = ["std"] }
+password-hash = { version = "0.5", features = ["std", "getrandom"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
