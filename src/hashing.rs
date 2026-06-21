@@ -9,6 +9,17 @@ pub enum HashError {
     Parse(String),
 }
 
+impl std::fmt::Display for HashError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HashError::Hash(e) => write!(f, "password hashing failed: {e}"),
+            HashError::Parse(e) => write!(f, "invalid password hash: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for HashError {}
+
 fn hasher() -> Argon2<'static> {
     // OWASP argon2id params: m=19456 KiB, t=2, p=1.
     let params = Params::new(19456, 2, 1, None).expect("valid argon2 params");
@@ -48,5 +59,13 @@ mod tests {
     #[test]
     fn malformed_hash_errors() {
         assert!(verify_password("x", "not-a-phc-string").is_err());
+    }
+
+    #[test]
+    fn same_password_hashes_differ_due_to_random_salt() {
+        // Each call must use a fresh random salt, so two hashes of the same
+        // password must not be byte-identical. Guards against a deterministic-salt
+        // regression that the other tests would not catch.
+        assert_ne!(hash_password("x").unwrap(), hash_password("x").unwrap());
     }
 }
