@@ -10,6 +10,18 @@ pub enum ConfigError {
     Invalid(String),
 }
 
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfigError::Read(e) => write!(f, "reading config: {e}"),
+            ConfigError::Parse(e) => write!(f, "parsing config: {e}"),
+            ConfigError::Invalid(e) => write!(f, "invalid config: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub server: ServerCfg,
@@ -230,6 +242,27 @@ scope = ["outdoor"]
     #[test]
     fn rejects_duplicate_camera_name() {
         let dup = format!("{SAMPLE}\n[[camera]]\nname = \"front-door\"\nupload_password_hash = \"$argon2id$q\"\n");
+        let c = parse_str(&dup).unwrap();
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_bogus_scope_string() {
+        let bad = SAMPLE.replace(r#"scope = "all""#, r#"scope = "everything""#);
+        assert!(parse_str(&bad).is_err());
+    }
+
+    #[test]
+    fn rejects_passive_ports_out_of_order() {
+        let bad = SAMPLE.replace("passive_ports = [50000, 50100]", "passive_ports = [50100, 50000]");
+        let c = parse_str(&bad).unwrap();
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_effective_username() {
+        // second camera's username collides with the first camera's effective login ("front-door")
+        let dup = format!("{SAMPLE}\n[[camera]]\nname = \"garage\"\nusername = \"front-door\"\nupload_password_hash = \"$argon2id$q\"\n");
         let c = parse_str(&dup).unwrap();
         assert!(c.validate().is_err());
     }
