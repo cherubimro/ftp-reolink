@@ -8,6 +8,7 @@ pub mod account;
 pub mod limits;
 pub mod retention;
 pub mod auth;
+pub mod backend;
 
 #[cfg(test)]
 mod tests {
