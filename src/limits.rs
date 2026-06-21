@@ -54,11 +54,11 @@ impl ConnTracker {
         if s.global >= self.max_global {
             return None;
         }
-        let entry = s.per_ip.entry(ip).or_insert(0);
-        if *entry >= self.max_per_ip {
+        let current = s.per_ip.get(&ip).copied().unwrap_or(0);
+        if current >= self.max_per_ip {
             return None;
         }
-        *entry += 1;
+        *s.per_ip.entry(ip).or_insert(0) += 1;
         s.global += 1;
         Some(ConnGuard { ip, state: Arc::clone(&self.state) })
     }
@@ -90,10 +90,25 @@ impl LoginTracker {
         }
     }
 
+    const GC_THRESHOLD: usize = 100_000;
+
     pub fn record_failure(&self, ip: IpAddr, now: Instant) {
         let mut s = self.state.lock().unwrap();
+        // Opportunistic GC: under source-IP-rotation flooding, drop entries whose
+        // window has gone stale and whose ban (if any) has expired, so the map
+        // stays bounded. (Bulk rotation floods are also handled at the firewall
+        // layer per the design's DoS section; this is in-process defense in depth.)
+        if s.len() > Self::GC_THRESHOLD {
+            let (window, ban) = (self.window, self.ban);
+            s.retain(|_, (_, window_start, banned)| {
+                let ban_active = banned.map_or(false, |t| now.duration_since(t) <= ban);
+                ban_active || now.duration_since(*window_start) <= window
+            });
+        }
         let entry = s.entry(ip).or_insert((0, now, None));
-        if now.duration_since(entry.1) > self.window {
+        let window_stale = now.duration_since(entry.1) > self.window;
+        let ban_expired = matches!(entry.2, Some(t) if now.duration_since(t) > self.ban);
+        if window_stale || ban_expired {
             *entry = (0, now, None);
         }
         entry.0 += 1;
@@ -103,12 +118,19 @@ impl LoginTracker {
     }
 
     pub fn is_banned(&self, ip: IpAddr, now: Instant) -> bool {
-        let s = self.state.lock().unwrap();
-        if let Some((_, _, Some(since))) = s.get(&ip) {
-            now.duration_since(*since) <= self.ban
-        } else {
-            false
+        let mut s = self.state.lock().unwrap();
+        if let Some((_, _, Some(since))) = s.get(&ip).copied() {
+            if now.duration_since(since) <= self.ban {
+                return true;
+            }
+            s.remove(&ip); // ban expired -> clean slate, evict
         }
+        false
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tracked_len(&self) -> usize {
+        self.state.lock().unwrap().len()
     }
 }
 
@@ -150,5 +172,27 @@ mod tests {
         assert!(t.is_banned(ip(1), now));
         // after ban window
         assert!(!t.is_banned(ip(1), now + Duration::from_secs(901)));
+    }
+
+    #[test]
+    fn expired_ban_is_evicted() {
+        let t = LoginTracker::new_raw(2, Duration::from_secs(300), Duration::from_secs(900));
+        let now = Instant::now();
+        t.record_failure(ip(1), now);
+        t.record_failure(ip(1), now);
+        assert!(t.is_banned(ip(1), now));
+        assert!(!t.is_banned(ip(1), now + Duration::from_secs(901)));
+        assert_eq!(t.tracked_len(), 0); // entry evicted after ban expiry
+    }
+
+    #[test]
+    fn stale_window_resets_failure_count() {
+        let t = LoginTracker::new_raw(3, Duration::from_secs(300), Duration::from_secs(900));
+        let now = Instant::now();
+        t.record_failure(ip(1), now);
+        t.record_failure(ip(1), now);
+        let later = now + Duration::from_secs(301); // window elapsed
+        t.record_failure(ip(1), later);
+        assert!(!t.is_banned(ip(1), later)); // count reset to 1, not banned
     }
 }
