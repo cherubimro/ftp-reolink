@@ -18,12 +18,25 @@ pub fn write_cert_files(
     cert_path: &Path,
     key_path: &Path,
 ) -> std::io::Result<()> {
+    // Cert may be world-readable.
     std::fs::write(cert_path, cert_pem)?;
-    std::fs::write(key_path, key_pem)?;
+
+    // Private key: create with 0600 from the start (no world-readable window).
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(key_path, std::fs::Permissions::from_mode(0o600))?;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(key_path)?;
+        f.write_all(key_pem.as_bytes())?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(key_path, key_pem)?;
     }
     Ok(())
 }
