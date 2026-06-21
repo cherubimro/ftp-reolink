@@ -166,6 +166,21 @@ impl Config {
                 }
             }
         }
+        // Viewer names must be unique and must not collide with a camera login,
+        // otherwise one account would silently overwrite the other in the
+        // login-keyed account map.
+        let mut viewer_names = BTreeSet::new();
+        for v in &self.viewer {
+            if !viewer_names.insert(v.name.clone()) {
+                return Err(ConfigError::Invalid(format!("duplicate viewer name {}", v.name)));
+            }
+            if logins.contains(&v.name) {
+                return Err(ConfigError::Invalid(format!(
+                    "viewer name {} collides with a camera login",
+                    v.name
+                )));
+            }
+        }
         for v in &self.viewer {
             if let Scope::List(items) = &v.scope {
                 for it in items {
@@ -264,6 +279,20 @@ scope = ["outdoor"]
         // second camera's username collides with the first camera's effective login ("front-door")
         let dup = format!("{SAMPLE}\n[[camera]]\nname = \"garage\"\nusername = \"front-door\"\nupload_password_hash = \"$argon2id$q\"\n");
         let c = parse_str(&dup).unwrap();
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_viewer_name() {
+        let dup = format!("{SAMPLE}\n[[viewer]]\nname = \"admin\"\npassword_hash = \"$argon2id$dup\"\nscope = \"all\"\n");
+        let c = parse_str(&dup).unwrap();
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_viewer_name_colliding_with_camera_login() {
+        let bad = format!("{SAMPLE}\n[[viewer]]\nname = \"front-door\"\npassword_hash = \"$argon2id$c\"\nscope = \"all\"\n");
+        let c = parse_str(&bad).unwrap();
         assert!(c.validate().is_err());
     }
 }
