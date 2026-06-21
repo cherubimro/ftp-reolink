@@ -60,7 +60,12 @@ fn contained(base: &Path, candidate: &Path) -> Result<PathBuf, PathError> {
         }
         match ancestor.file_name() {
             Some(name) => {
-                tail = Path::new(name).join(&tail);
+                // Use push to avoid a trailing slash when tail is empty.
+                let mut new_tail = PathBuf::from(name);
+                if tail != PathBuf::new() {
+                    new_tail.push(&tail);
+                }
+                tail = new_tail;
                 ancestor.pop();
             }
             None => return Err(PathError::NotFound),

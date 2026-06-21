@@ -79,87 +79,77 @@ fn path_err_to_storage(e: PathError) -> Error {
 // Metadata wrapper
 // ---------------------------------------------------------------------------
 
-/// Thin wrapper around `std::fs::Metadata` implementing `unftp_core::storage::Metadata`.
+/// Metadata for storage entries: either a real filesystem metadata or a synthesized directory.
 #[derive(Debug, Clone)]
-pub struct Meta(std::fs::Metadata);
+pub enum Meta {
+    Real(std::fs::Metadata),
+    SynthDir,
+}
 
 impl Metadata for Meta {
     fn len(&self) -> u64 {
-        self.0.len()
+        match self {
+            Meta::Real(m) => m.len(),
+            Meta::SynthDir => 0,
+        }
     }
 
     fn is_dir(&self) -> bool {
-        self.0.is_dir()
+        match self {
+            Meta::Real(m) => m.is_dir(),
+            Meta::SynthDir => true,
+        }
     }
 
     fn is_file(&self) -> bool {
-        self.0.is_file()
+        match self {
+            Meta::Real(m) => m.is_file(),
+            Meta::SynthDir => false,
+        }
     }
 
     fn is_symlink(&self) -> bool {
-        self.0.file_type().is_symlink()
+        match self {
+            Meta::Real(m) => m.file_type().is_symlink(),
+            Meta::SynthDir => false,
+        }
     }
 
     fn modified(&self) -> Result<SystemTime> {
-        self.0.modified().map_err(Error::from)
+        match self {
+            Meta::Real(m) => m.modified().map_err(|e| Error::new(ErrorKind::LocalError, e)),
+            Meta::SynthDir => Ok(SystemTime::UNIX_EPOCH),
+        }
     }
 
     fn gid(&self) -> u32 {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            self.0.gid()
+        match self {
+            Meta::Real(m) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    m.gid()
+                }
+                #[cfg(not(unix))]
+                0
+            }
+            Meta::SynthDir => 0,
         }
-        #[cfg(not(unix))]
-        0
     }
 
     fn uid(&self) -> u32 {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            self.0.uid()
+        match self {
+            Meta::Real(m) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    m.uid()
+                }
+                #[cfg(not(unix))]
+                0
+            }
+            Meta::SynthDir => 0,
         }
-        #[cfg(not(unix))]
-        0
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Synthesized directory metadata (for Viewer root listing)
-// ---------------------------------------------------------------------------
-
-/// Fake `Metadata` for synthesized directories in a Viewer's root listing.
-#[derive(Debug, Clone)]
-pub struct SynthDirMeta;
-
-impl Metadata for SynthDirMeta {
-    fn len(&self) -> u64 {
-        0
-    }
-
-    fn is_dir(&self) -> bool {
-        true
-    }
-
-    fn is_file(&self) -> bool {
-        false
-    }
-
-    fn is_symlink(&self) -> bool {
-        false
-    }
-
-    fn modified(&self) -> Result<SystemTime> {
-        Ok(SystemTime::UNIX_EPOCH)
-    }
-
-    fn gid(&self) -> u32 {
-        0
-    }
-
-    fn uid(&self) -> u32 {
-        0
     }
 }
 
@@ -268,26 +258,34 @@ where
 
     // 5. Stream.
     let mut input = input;
-    let bytes_written = tokio::io::copy(&mut input, &mut file)
-        .await
-        .map_err(|e| {
-            // Best effort cleanup on error.
-            let staging_clone = staging.clone();
-            tokio::spawn(async move {
-                let _ = tokio::fs::remove_file(&staging_clone).await;
-            });
-            StoreError::Io(e)
-        })?;
+    let bytes_written = match tokio::io::copy(&mut input, &mut file).await {
+        Ok(n) => n,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&staging).await;
+            return Err(StoreError::Io(e));
+        }
+    };
 
-    // 6. Flush and atomically rename.
+    // 6. Flush and hard-link staging → final (no-clobber, POSIX-portable).
     use tokio::io::AsyncWriteExt;
     file.flush().await.map_err(StoreError::Io)?;
     drop(file);
-    tokio::fs::rename(&staging, real_final)
-        .await
-        .map_err(StoreError::Io)?;
-
-    Ok(bytes_written)
+    // finalize: hard-link staging -> final atomically without clobbering.
+    match tokio::fs::hard_link(&staging, real_final).await {
+        Ok(()) => {
+            let _ = tokio::fs::remove_file(&staging).await; // drop the staging name
+            Ok(bytes_written)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Final appeared concurrently — treat as finalized/immutable, discard staging.
+            let _ = tokio::fs::remove_file(&staging).await;
+            Err(StoreError::Finalized)
+        }
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&staging).await;
+            Err(StoreError::Io(e))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -329,7 +327,7 @@ impl StorageBackend<ReoUser> for ReoBackend {
                 Error::from(e)
             }
         })?;
-        Ok(Meta(m.into()))
+        Ok(Meta::Real(m))
     }
 
     // -----------------------------------------------------------------------
@@ -358,7 +356,7 @@ impl StorageBackend<ReoUser> for ReoBackend {
                     .into_iter()
                     .map(|name| Fileinfo {
                         path: PathBuf::from(&name),
-                        metadata: Meta(synth_dir_meta()),
+                        metadata: Meta::SynthDir,
                     })
                     .collect();
                 return Ok(entries);
@@ -399,7 +397,7 @@ impl StorageBackend<ReoUser> for ReoBackend {
 
             entries.push(Fileinfo {
                 path: PathBuf::from(name),
-                metadata: Meta(m),
+                metadata: Meta::Real(m),
             });
         }
 
@@ -599,17 +597,6 @@ fn store_error_to_storage(e: StoreError) -> Error {
         StoreError::Finalized => Error::new(ErrorKind::PermanentFileNotAvailable, e.to_string()),
         StoreError::Io(io_err) => Error::from(io_err),
     }
-}
-
-// ---------------------------------------------------------------------------
-// Synthesize a real std::fs::Metadata for a directory (used for Viewer root listing)
-// We need Meta(std::fs::Metadata) but std::fs::Metadata can't be constructed
-// directly — we use a real tempdir instead.
-// ---------------------------------------------------------------------------
-
-fn synth_dir_meta() -> std::fs::Metadata {
-    // We need a real std::fs::Metadata for a directory. Use the current directory.
-    std::fs::metadata(".").expect("cannot read current dir metadata for synthesis")
 }
 
 // ---------------------------------------------------------------------------
@@ -930,5 +917,56 @@ mod tests {
             .unwrap();
         let contents = std::fs::read(&quarantine).unwrap();
         assert_eq!(contents, b"new data", "quarantine must overwrite");
+    }
+
+    // -----------------------------------------------------------------------
+    // Backend: normal file never quarantined
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn put_nontest_name_never_quarantined() {
+        use crate::append::is_reolink_test_file;
+        // Verify name classification.
+        assert!(!is_reolink_test_file("clip.mp4"), "clip.mp4 must not be a test file");
+
+        let dir = tempdir().unwrap();
+        let home = dir.path().to_path_buf();
+        let u = uploader(home.clone());
+        let backend = ReoBackend;
+
+        backend
+            .put(&u, &b"video data"[..], Path::new("/clip.mp4"), 0)
+            .await
+            .unwrap();
+
+        // File lands at the real path, not in quarantine.
+        assert!(home.join("clip.mp4").exists(), "clip.mp4 must be at real path");
+        // No quarantine directory should have been created.
+        assert!(
+            !home.join(QUARANTINE_DIR).exists(),
+            "quarantine dir must not exist for normal file"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Meta::SynthDir: is_dir, len, modified — no panic, no filesystem access
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn synth_dir_meta_is_dir_zero_len_no_panic() {
+        let m = Meta::SynthDir;
+        assert!(m.is_dir(), "SynthDir must report is_dir() == true");
+        assert!(!m.is_file(), "SynthDir must report is_file() == false");
+        assert!(!m.is_symlink(), "SynthDir must report is_symlink() == false");
+        assert_eq!(m.len(), 0, "SynthDir must report len() == 0");
+        let modified = m.modified();
+        assert!(modified.is_ok(), "SynthDir modified() must be Ok");
+        assert_eq!(
+            modified.unwrap(),
+            std::time::SystemTime::UNIX_EPOCH,
+            "SynthDir modified() must be UNIX_EPOCH"
+        );
+        assert_eq!(m.uid(), 0);
+        assert_eq!(m.gid(), 0);
     }
 }
