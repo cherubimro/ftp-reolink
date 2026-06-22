@@ -1,0 +1,9 @@
+[Unit]
+Description=Run reoftpd retention sweep daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

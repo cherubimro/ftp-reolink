@@ -1,0 +1,9 @@
+[Unit]
+Description=reoftpd retention sweep
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/reoftpd cleanup --once --config /etc/reoftpd/reoftpd.toml
+User=reoftpd
+Group=reoftpd
+ReadWritePaths=/srv/reolink
