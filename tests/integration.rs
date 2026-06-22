@@ -65,6 +65,34 @@ fn connect_ftp(port: u16) -> FtpStream {
     unreachable!()
 }
 
+/// Assert that `result` is a server-side permanent rejection (5xx FTP reply).
+///
+/// The suppaftp API wraps any non-expected server reply in
+/// `FtpError::UnexpectedResponse(Response)` where `Response.status.code()`
+/// carries the numeric FTP reply code.  A 5xx code means the server issued
+/// a Permanent Negative Completion Reply — this is what we need to verify
+/// for security-enforcement assertions.
+fn assert_server_rejected<T: std::fmt::Debug>(
+    result: Result<T, suppaftp::FtpError>,
+    what: &str,
+) {
+    match result {
+        Err(suppaftp::FtpError::UnexpectedResponse(resp)) => {
+            let code = resp.status.code();
+            assert!(
+                code >= 500 && code < 600,
+                "{what}: expected a 5xx server rejection, got reply {:?} (code {})",
+                resp,
+                code
+            );
+        }
+        other => panic!(
+            "{what}: expected a server 5xx rejection (UnexpectedResponse), got {:?}",
+            other
+        ),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The test
 // ---------------------------------------------------------------------------
@@ -81,7 +109,7 @@ fn end_to_end_append_only_and_scoped_read() {
     let ctrl = free_port();
     // Use a wider passive range to reduce port-reuse flakiness.
     let pasv_lo = free_port();
-    let pasv_hi = pasv_lo + 20;
+    let pasv_hi = pasv_lo + 30;
 
     let toml = format!(
         r#"
@@ -138,37 +166,34 @@ scope = "all"
             result.err()
         );
         // Verify the file landed at the right path with correct contents.
-        let expected_path = root.join("front-door").join("clip.mp4");
+        let expected_clip_path = root.join("front-door").join("clip.mp4");
         assert!(
-            expected_path.exists(),
-            "assertion 1 failed: clip.mp4 must exist at {}", expected_path.display()
+            expected_clip_path.exists(),
+            "assertion 1 failed: clip.mp4 must exist at {}", expected_clip_path.display()
         );
-        let contents = std::fs::read(&expected_path).expect("read clip.mp4");
+        let contents = std::fs::read(&expected_clip_path).expect("read clip.mp4");
         assert_eq!(
             contents, b"hello",
             "assertion 1 failed: clip.mp4 contents must be 'hello'"
         );
 
-        // Assertion 2: STOR same name again -> Err (no overwrite)
+        // Assertion 2: STOR same name again -> server 5xx (no overwrite)
         let result = ftp.put_file("clip.mp4", &mut Cursor::new(b"overwrite" as &[u8]));
-        assert!(
-            result.is_err(),
-            "assertion 2 failed: second STOR of clip.mp4 must fail (no overwrite), got Ok"
+        assert_server_rejected(result, "assertion 2: second STOR of clip.mp4 (no overwrite)");
+        // Verify file was NOT modified by the rejected STOR.
+        let after = std::fs::read(&expected_clip_path).expect("re-read clip.mp4");
+        assert_eq!(
+            after, b"hello",
+            "clip.mp4 was overwritten despite the STOR being rejected"
         );
 
-        // Assertion 3: RETR -> Err (uploader cannot read)
+        // Assertion 3: RETR -> server 5xx (uploader cannot read)
         let result = ftp.retr_as_buffer("clip.mp4");
-        assert!(
-            result.is_err(),
-            "assertion 3 failed: RETR by uploader must fail, got Ok"
-        );
+        assert_server_rejected(result, "assertion 3: RETR by uploader (read denied)");
 
-        // Assertion 4: DELE -> Err (uploader cannot delete)
+        // Assertion 4: DELE -> server 5xx (uploader cannot delete)
         let result = ftp.rm("clip.mp4");
-        assert!(
-            result.is_err(),
-            "assertion 4 failed: DELE by uploader must fail, got Ok"
-        );
+        assert_server_rejected(result, "assertion 4: DELE by uploader (delete denied)");
 
         // Assertion 5: MKD sub -> Ok; STOR sub/c2.mp4 -> Ok
         let mkdir_result = ftp.mkdir("sub");
@@ -189,12 +214,9 @@ scope = "all"
             "assertion 5b failed: sub/c2.mp4 must exist at {}", expected_sub.display()
         );
 
-        // Assertion 6: RMD sub -> Err (uploader cannot rmdir)
+        // Assertion 6: RMD sub -> server 5xx (uploader cannot rmdir)
         let result = ftp.rmdir("sub");
-        assert!(
-            result.is_err(),
-            "assertion 6 failed: RMD by uploader must fail, got Ok"
-        );
+        assert_server_rejected(result, "assertion 6: RMD by uploader (rmdir denied)");
 
         // Assertion 7: Reolink test file STOR twice -> both Ok; lands in .quarantine/
         let result1 = ftp.put_file("test.txt", &mut Cursor::new(b"probe1" as &[u8]));
@@ -248,19 +270,13 @@ scope = "all"
             "assertion 8b failed: viewer RETR contents must be 'hello'"
         );
 
-        // Assertion 9: STOR -> Err (viewer cannot write)
+        // Assertion 9: STOR -> server 5xx (viewer cannot write)
         let result = ftp.put_file("/front-door/evil.mp4", &mut Cursor::new(b"evil" as &[u8]));
-        assert!(
-            result.is_err(),
-            "assertion 9 failed: STOR by viewer must fail, got Ok"
-        );
+        assert_server_rejected(result, "assertion 9: STOR by viewer (write denied)");
 
-        // Assertion 10: DELE -> Err (viewer cannot delete)
+        // Assertion 10: DELE -> server 5xx (viewer cannot delete)
         let result = ftp.rm("/front-door/clip.mp4");
-        assert!(
-            result.is_err(),
-            "assertion 10 failed: DELE by viewer must fail, got Ok"
-        );
+        assert_server_rejected(result, "assertion 10: DELE by viewer (delete denied)");
 
         ftp.quit().ok();
     }
