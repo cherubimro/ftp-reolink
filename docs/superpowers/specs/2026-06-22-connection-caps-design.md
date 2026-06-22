@@ -105,6 +105,33 @@ remain unwired).
 into `ReoAuth { sessions, .. }`, and registers
 `ReoPresenceListener { tracker }` via `.notify_presence(...)`.
 
+## 6b. SIGHUP config reload (no server stop)
+
+Reload the config file on `SIGHUP` without dropping live connections, so an
+operator can add/remove cameras and viewers (and change caps) without a restart.
+
+- **Swappable accounts.** `ReoAuth` and `ReoUserProvider` hold
+  `Arc<arc_swap::ArcSwap<Accounts>>` instead of `Arc<Accounts>`, and load the
+  current value per call (`self.accounts.load()`). Add `arc-swap = "1"`.
+- **Reload function (testable).** `reload_config(path, &accounts_swap,
+  &tracker) -> anyhow::Result<()>`: `config::load(path)` (parse + validate);
+  on success, `ensure_home_dirs(&cfg)` for any new cameras, build the new
+  `Accounts`, `accounts_swap.store(Arc::new(new_accounts))`, and update the
+  tracker's caps via `tracker.set_limits(...)`. **On parse/validate failure,
+  log the error and keep the running config unchanged** — a bad edit must never
+  take the server down.
+- **Signal handler.** `run` spawns a tokio task on
+  `tokio::signal::unix::signal(SignalKind::hangup())` that calls
+  `reload_config` on each `SIGHUP` and logs the outcome. It captures the config
+  path, the `ArcSwap` handle, and the `Arc<SessionTracker>`.
+- **What reloads:** accounts (cameras/viewers/groups) and `[limits]` caps.
+  **What does NOT reload** (baked into the libunftp `Server` at build time;
+  require a restart): bind address/port, passive-port range, TLS cert/key,
+  `idle_session_timeout`, failed-logins policy. Documented in the README.
+- **Tracker interaction:** removing an account on reload leaves its active
+  sessions counted until they log out (saturating); new accounts work
+  immediately.
+
 ## 7. Testing
 
 Unit:
@@ -122,6 +149,12 @@ Integration (extend `tests/integration.rs`): start the server with
 then a second login attempt is **refused**. Close the first; a new login then
 succeeds (confirms `LoggedOut` decrement).
 
+Reload: unit-test `reload_config` directly (write a config, load+swap, assert
+the `ArcSwap` now exposes the new account; write an INVALID config, call
+reload, assert it returns `Err` AND the previously-loaded accounts are
+unchanged). The thin signal-task wiring is validated manually.
+
 ## 8. Out of scope (unchanged from prior limitations)
 Per-IP in-process caps; `new_conns_per_min_per_ip`; `min_transfer_rate`;
-auto-applying nftables; SIGHUP reload.
+auto-applying nftables. (SIGHUP reload of accounts + caps is now IN scope — see
+§6b; server-level settings still require a restart.)
