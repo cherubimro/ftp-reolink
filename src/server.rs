@@ -37,13 +37,12 @@
 //!    scope for this task. No stub handler is wired — claiming to reload without
 //!    actually doing so would be worse than doing nothing.
 //!
-//! 3. **`ConnTracker` (per-IP / global connection caps) is not wired.** libunftp 0.23
-//!    exposes no per-connection accept hook through the public `listen` API.
+//! 3. **Session caps (`SessionTracker`) are not yet wired.** libunftp 0.23 exposes
+//!    no per-connection accept hook through the public `listen` API.
 //!    Brute-force lockout IS handled by the built-in `failed_logins_policy` (wired
 //!    below). Connection-flood caps rely on the firewall layer (nftables) per the
-//!    design's DoS section. `limits::ConnTracker` is currently unwired (no
-//!    per-connection accept hook in libunftp 0.23's public API). The superseded
-//!    `LoginTracker` was removed in the final pre-merge cleanup.
+//!    design's DoS section. `limits::SessionTracker` (global + per-account) will
+//!    be wired in the auth layer (Task 3).
 
 use crate::account::{self, Accounts};
 use crate::auth::{ReoAuth, ReoUser, ReoUserProvider};
