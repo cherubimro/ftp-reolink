@@ -1,7 +1,7 @@
 //! argon2id password hashing producing PHC strings.
 use argon2::{Algorithm, Argon2, Params, Version};
-use password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use password_hash::rand_core::OsRng;
+use password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 
 #[derive(Debug)]
 pub enum HashError {

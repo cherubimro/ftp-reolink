@@ -13,8 +13,8 @@ use crate::account::{Account, Accounts, Role};
 use crate::hashing::verify_password;
 use std::sync::Arc;
 use unftp_core::auth::{
-    AuthenticationError, Authenticator, ChannelEncryptionState, Credentials, Principal,
-    UserDetail, UserDetailError, UserDetailProvider,
+    AuthenticationError, Authenticator, ChannelEncryptionState, Credentials, Principal, UserDetail,
+    UserDetailError, UserDetailProvider,
 };
 
 /// Pure credential check — returns the matched account on success.
@@ -22,7 +22,11 @@ use unftp_core::auth::{
 /// Looks up the account by `login`, then verifies `password` against the stored
 /// argon2id PHC hash. Returns `None` on any failure (unknown user, wrong
 /// password, or hash parse error). This is the security core and is unit-tested directly.
-pub fn check_credentials<'a>(accounts: &'a Accounts, login: &str, password: &str) -> Option<&'a Account> {
+pub fn check_credentials<'a>(
+    accounts: &'a Accounts,
+    login: &str,
+    password: &str,
+) -> Option<&'a Account> {
     let acct = accounts.get(login)?;
     match verify_password(password, &acct.password_hash) {
         Ok(true) => Some(acct),
@@ -108,10 +112,7 @@ pub struct ReoUserProvider {
 impl UserDetailProvider for ReoUserProvider {
     type User = ReoUser;
 
-    async fn provide_user_detail(
-        &self,
-        principal: &Principal,
-    ) -> Result<ReoUser, UserDetailError> {
+    async fn provide_user_detail(&self, principal: &Principal) -> Result<ReoUser, UserDetailError> {
         match self.accounts.get(&principal.username) {
             Some(a) => Ok(ReoUser {
                 login: a.username.clone(),
@@ -142,7 +143,9 @@ mod tests {
             Account {
                 username: login.to_string(),
                 password_hash: hash_password(plain).unwrap(),
-                role: Role::Uploader { home: PathBuf::from("/srv/reolink/x") },
+                role: Role::Uploader {
+                    home: PathBuf::from("/srv/reolink/x"),
+                },
                 require_tls,
             },
         );
@@ -197,7 +200,10 @@ mod tests {
 
         // require_tls=true + plaintext → authentication error
         let result = auth.authenticate("cam", &plaintext_creds).await;
-        assert!(result.is_err(), "expected Err for plaintext channel with require_tls=true");
+        assert!(
+            result.is_err(),
+            "expected Err for plaintext channel with require_tls=true"
+        );
 
         // require_tls=true + TLS → success with correct username
         let result = auth.authenticate("cam", &secure_creds).await;
@@ -238,14 +244,21 @@ mod tests {
 
         let uploader = ReoUser {
             login: "cam".to_string(),
-            role: Role::Uploader { home: PathBuf::from("/srv/reolink/x") },
+            role: Role::Uploader {
+                home: PathBuf::from("/srv/reolink/x"),
+            },
             require_tls: false,
         };
-        assert_eq!(uploader.home(), Some(std::path::Path::new("/srv/reolink/x")));
+        assert_eq!(
+            uploader.home(),
+            Some(std::path::Path::new("/srv/reolink/x"))
+        );
 
         let viewer = ReoUser {
             login: "viewer".to_string(),
-            role: Role::Viewer { scope: ScopeMap::single(PathBuf::from("/srv/reolink")) },
+            role: Role::Viewer {
+                scope: ScopeMap::single(PathBuf::from("/srv/reolink")),
+            },
             require_tls: false,
         };
         assert_eq!(viewer.home(), None);
@@ -257,11 +270,15 @@ mod tests {
         let provider = ReoUserProvider {
             accounts: Arc::new(accounts_with("cam", "pw", false)),
         };
-        let principal = Principal { username: "cam".to_string() };
+        let principal = Principal {
+            username: "cam".to_string(),
+        };
         let user = provider.provide_user_detail(&principal).await.unwrap();
         assert_eq!(user.login, "cam");
 
-        let unknown = Principal { username: "ghost".to_string() };
+        let unknown = Principal {
+            username: "ghost".to_string(),
+        };
         let err = provider.provide_user_detail(&unknown).await.unwrap_err();
         assert!(matches!(err, UserDetailError::UserNotFound { .. }));
     }

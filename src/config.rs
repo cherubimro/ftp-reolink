@@ -172,7 +172,10 @@ impl Config {
         let mut viewer_names = BTreeSet::new();
         for v in &self.viewer {
             if !viewer_names.insert(v.name.clone()) {
-                return Err(ConfigError::Invalid(format!("duplicate viewer name {}", v.name)));
+                return Err(ConfigError::Invalid(format!(
+                    "duplicate viewer name {}",
+                    v.name
+                )));
             }
             if logins.contains(&v.name) {
                 return Err(ConfigError::Invalid(format!(
@@ -256,7 +259,9 @@ scope = ["outdoor"]
 
     #[test]
     fn rejects_duplicate_camera_name() {
-        let dup = format!("{SAMPLE}\n[[camera]]\nname = \"front-door\"\nupload_password_hash = \"$argon2id$q\"\n");
+        let dup = format!(
+            "{SAMPLE}\n[[camera]]\nname = \"front-door\"\nupload_password_hash = \"$argon2id$q\"\n"
+        );
         let c = parse_str(&dup).unwrap();
         assert!(c.validate().is_err());
     }
@@ -269,7 +274,10 @@ scope = ["outdoor"]
 
     #[test]
     fn rejects_passive_ports_out_of_order() {
-        let bad = SAMPLE.replace("passive_ports = [50000, 50100]", "passive_ports = [50100, 50000]");
+        let bad = SAMPLE.replace(
+            "passive_ports = [50000, 50100]",
+            "passive_ports = [50100, 50000]",
+        );
         let c = parse_str(&bad).unwrap();
         assert!(c.validate().is_err());
     }

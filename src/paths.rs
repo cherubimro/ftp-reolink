@@ -75,11 +75,17 @@ fn contained(base: &Path, candidate: &Path) -> Result<PathBuf, PathError> {
 
 impl ScopeMap {
     pub fn single(root: PathBuf) -> Self {
-        ScopeMap { roots: BTreeMap::new(), single: Some(root) }
+        ScopeMap {
+            roots: BTreeMap::new(),
+            single: Some(root),
+        }
     }
 
     pub fn multi(roots: BTreeMap<String, PathBuf>) -> Self {
-        ScopeMap { roots, single: None }
+        ScopeMap {
+            roots,
+            single: None,
+        }
     }
 
     pub fn list_root(&self) -> Vec<String> {
@@ -119,7 +125,9 @@ mod tests {
     fn single_root_resolves_inside() {
         let (_d, cam) = fixture();
         let m = ScopeMap::single(cam.clone());
-        let got = m.resolve(std::path::Path::new("/2026-06-19/clip.mp4")).unwrap();
+        let got = m
+            .resolve(std::path::Path::new("/2026-06-19/clip.mp4"))
+            .unwrap();
         assert_eq!(got, cam.join("2026-06-19/clip.mp4"));
     }
 
@@ -138,7 +146,10 @@ mod tests {
         roots.insert("front-door".to_string(), cam);
         roots.insert("driveway".to_string(), d.path().join("driveway"));
         let m = ScopeMap::multi(roots);
-        assert_eq!(m.list_root(), vec!["driveway".to_string(), "front-door".to_string()]);
+        assert_eq!(
+            m.list_root(),
+            vec!["driveway".to_string(), "front-door".to_string()]
+        );
     }
 
     #[test]
@@ -147,7 +158,9 @@ mod tests {
         let mut roots = BTreeMap::new();
         roots.insert("front-door".to_string(), cam.clone());
         let m = ScopeMap::multi(roots);
-        let got = m.resolve(std::path::Path::new("/front-door/2026-06-19/clip.mp4")).unwrap();
+        let got = m
+            .resolve(std::path::Path::new("/front-door/2026-06-19/clip.mp4"))
+            .unwrap();
         assert_eq!(got, cam.join("2026-06-19/clip.mp4"));
     }
 
@@ -157,7 +170,10 @@ mod tests {
         let mut roots = BTreeMap::new();
         roots.insert("front-door".to_string(), cam);
         let m = ScopeMap::multi(roots);
-        assert_eq!(m.resolve(std::path::Path::new("/driveway/x")).unwrap_err(), PathError::OutsideScope);
+        assert_eq!(
+            m.resolve(std::path::Path::new("/driveway/x")).unwrap_err(),
+            PathError::OutsideScope
+        );
     }
 
     #[cfg(unix)]
@@ -168,7 +184,10 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), cam.join("escape")).unwrap();
         let m = ScopeMap::single(cam);
         // Resolving the symlink itself must escape -> Traversal.
-        assert_eq!(m.resolve(std::path::Path::new("/escape")).unwrap_err(), PathError::Traversal);
+        assert_eq!(
+            m.resolve(std::path::Path::new("/escape")).unwrap_err(),
+            PathError::Traversal
+        );
     }
 
     #[cfg(unix)]
@@ -180,7 +199,8 @@ mod tests {
         let m = ScopeMap::single(cam);
         // A non-existent leaf behind the symlink must STILL be rejected (the bug).
         assert_eq!(
-            m.resolve(std::path::Path::new("/escape/definitely-not-here-1234")).unwrap_err(),
+            m.resolve(std::path::Path::new("/escape/definitely-not-here-1234"))
+                .unwrap_err(),
             PathError::Traversal
         );
     }

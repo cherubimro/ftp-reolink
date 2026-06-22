@@ -60,7 +60,9 @@ pub fn build(cfg: &Config) -> Accounts {
             Account {
                 username: login,
                 password_hash: cam.upload_password_hash.clone(),
-                role: Role::Uploader { home: cfg.archive.root.join(&cam.name) },
+                role: Role::Uploader {
+                    home: cfg.archive.root.join(&cam.name),
+                },
                 require_tls: cam.require_tls.unwrap_or(false),
             },
         );
@@ -71,7 +73,9 @@ pub fn build(cfg: &Config) -> Accounts {
             Account {
                 username: v.name.clone(),
                 password_hash: v.password_hash.clone(),
-                role: Role::Viewer { scope: expand_scope(cfg, &v.scope) },
+                role: Role::Viewer {
+                    scope: expand_scope(cfg, &v.scope),
+                },
                 require_tls: false,
             },
         );
@@ -154,7 +158,10 @@ scope = ["outdoor", "front-door"]
         if let Role::Viewer { scope } = &a.role {
             let mut names = scope.list_root();
             names.sort();
-            assert_eq!(names, vec!["driveway".to_string(), "front-door".to_string()]);
+            assert_eq!(
+                names,
+                vec!["driveway".to_string(), "front-door".to_string()]
+            );
         } else {
             panic!("expected viewer");
         }

@@ -16,13 +16,10 @@ pub enum Command {
         #[arg(long, default_value = "/etc/reoftpd/reoftpd.toml")]
         config: PathBuf,
     },
-    /// Run the retention sweep.
+    /// Run the retention sweep once and exit.
     Cleanup {
         #[arg(long, default_value = "/etc/reoftpd/reoftpd.toml")]
         config: PathBuf,
-        /// Run once then exit (default: loop with sleep).
-        #[arg(long)]
-        once: bool,
         /// Print what would be deleted without deleting anything.
         #[arg(long)]
         dry_run: bool,
@@ -91,9 +88,7 @@ pub fn render_viewer_entry(name: &str, hash: &str, scope: &str) -> String {
             .collect();
         format!("[{}]", items.join(", "))
     };
-    format!(
-        "\n[[viewer]]\nname = \"{name}\"\npassword_hash = \"{hash}\"\nscope = {scope_toml}\n"
-    )
+    format!("\n[[viewer]]\nname = \"{name}\"\npassword_hash = \"{hash}\"\nscope = {scope_toml}\n")
 }
 
 #[cfg(test)]

@@ -1,17 +1,17 @@
 #![forbid(unsafe_code)]
 
-pub mod append;
-pub mod paths;
-pub mod hashing;
-pub mod config;
 pub mod account;
-pub mod limits;
-pub mod retention;
+pub mod append;
 pub mod auth;
 pub mod backend;
-pub mod tls;
-pub mod server;
 pub mod cli;
+pub mod config;
+pub mod hashing;
+pub mod limits;
+pub mod paths;
+pub mod retention;
+pub mod server;
+pub mod tls;
 
 #[cfg(test)]
 mod tests {

@@ -21,8 +21,12 @@ access.
   scope but cannot write anything.
 - **30-day retention** (configurable): the daily cleanup sweep deletes footage
   older than `retention_days` and prunes empty directories.
-- **Brute-force lockout**: failed-login attempts are tracked per IP; excessive
-  failures trigger a temporary ban (configured in `[limits]`).
+- **Brute-force lockout**: failed-login attempts are tracked per IP and username
+  via libunftp's built-in `FailedLoginsPolicy`.  After `max_attempts` failures
+  within `window_secs` the account/IP pair is locked.  `ban_secs` is parsed
+  but is **not currently honored** — libunftp's policy has no ban-duration
+  parameter; the lockout resets after `window_secs`.  `ban_secs` is reserved
+  for a future custom enforcement layer.
 - **Opportunistic FTPS**: all connections may upgrade to TLS via `AUTH TLS`;
   individual camera accounts can set `require_tls = true` to make TLS
   mandatory.
@@ -126,11 +130,12 @@ FTP is not designed for hostile networks.  The strongest mitigation is binding
 port is not reachable from outside your network.
 
 Connection-flood rate limits (`max_connections`, `max_connections_per_ip`,
-`new_conns_per_min_per_ip`) are parsed and stored but are not yet wired into
-the accept loop.  Enforce flood limits at the firewall layer (nftables
-`limit rate` / `meter` rules).  In-server brute-force lockout
-(`failed_login_lockout`) and idle connection timeout (`idle_timeout_secs`) are
-active.
+`new_conns_per_min_per_ip`) and `min_transfer_rate_bytes_per_sec` are parsed
+and stored but are not yet wired into the server.  Enforce flood limits at the
+firewall layer (nftables `limit rate` / `meter` rules).  In-server brute-force
+lockout (`failed_login_lockout`) and idle connection timeout
+(`idle_timeout_secs`) are active.  Note that `failed_login_lockout.ban_secs`
+is parsed but not yet honored — see the Security guarantees section.
 
 ## Configure your Reolink camera
 
@@ -190,10 +195,12 @@ systemctl restart reoftpd
   path is not yet implemented.
 
 - **Per-IP / global connection caps not yet enforced server-side**: the
-  `max_connections`, `max_connections_per_ip`, and `new_conns_per_min_per_ip`
-  fields are parsed and validated but are not yet wired into the accept loop.
-  Use firewall rules to enforce connection-rate limits.  The in-server controls
-  that _are_ active are `idle_timeout_secs` and `failed_login_lockout`.
+  `max_connections`, `max_connections_per_ip`, `new_conns_per_min_per_ip`, and
+  `min_transfer_rate_bytes_per_sec` fields are parsed and validated but are not
+  yet wired into the server.  Use firewall rules to enforce connection-rate
+  limits; slow-connection (Slowloris) defence is not yet implemented in-process.
+  The in-server controls that _are_ active are `idle_timeout_secs` and
+  `failed_login_lockout` (see note above regarding `ban_secs`).
 
 - **Passive port advertisement**: on a NAT'd network, you may need to configure
   the external IP for passive-mode responses.  This is not currently

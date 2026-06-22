@@ -117,7 +117,9 @@ impl Metadata for Meta {
 
     fn modified(&self) -> Result<SystemTime> {
         match self {
-            Meta::Real(m) => m.modified().map_err(|e| Error::new(ErrorKind::LocalError, e)),
+            Meta::Real(m) => m
+                .modified()
+                .map_err(|e| Error::new(ErrorKind::LocalError, e)),
             Meta::SynthDir => Ok(SystemTime::UNIX_EPOCH),
         }
     }
@@ -317,9 +319,7 @@ impl StorageBackend<ReoUser> for ReoBackend {
             return Err(ErrorKind::PermissionDenied.into());
         }
         let view = user_view(user);
-        let real = view
-            .resolve(path.as_ref())
-            .map_err(path_err_to_storage)?;
+        let real = view.resolve(path.as_ref()).map_err(path_err_to_storage)?;
         let m = tokio::fs::metadata(&real).await.map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 Error::from(ErrorKind::PermanentFileNotAvailable)
@@ -350,7 +350,7 @@ impl StorageBackend<ReoUser> for ReoBackend {
         // Viewer at virtual root "/" with multi-root scope → synthesize dirs.
         if let Role::Viewer { scope } = &user.role {
             let is_root = virt == Path::new("/") || virt == Path::new("");
-            if is_root && scope.list_root().len() > 0 && !is_single_scope(scope) {
+            if is_root && !scope.list_root().is_empty() && !is_single_scope(scope) {
                 let entries = scope
                     .list_root()
                     .into_iter()
@@ -364,9 +364,7 @@ impl StorageBackend<ReoUser> for ReoBackend {
         }
 
         let view = user_view(user);
-        let real = view
-            .resolve(virt)
-            .map_err(path_err_to_storage)?;
+        let real = view.resolve(virt).map_err(path_err_to_storage)?;
 
         let mut entries = Vec::new();
         let mut rd = tokio::fs::read_dir(&real).await.map_err(|e| {
@@ -417,9 +415,7 @@ impl StorageBackend<ReoUser> for ReoBackend {
             return Err(ErrorKind::PermissionDenied.into());
         }
         let view = user_view(user);
-        let real = view
-            .resolve(path.as_ref())
-            .map_err(path_err_to_storage)?;
+        let real = view.resolve(path.as_ref()).map_err(path_err_to_storage)?;
 
         let mut file = tokio::fs::File::open(&real).await.map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -441,7 +437,10 @@ impl StorageBackend<ReoUser> for ReoBackend {
     // -----------------------------------------------------------------------
     // put
     // -----------------------------------------------------------------------
-    async fn put<P: AsRef<Path> + Send + Debug, R: tokio::io::AsyncRead + Send + Sync + Unpin + 'static>(
+    async fn put<
+        P: AsRef<Path> + Send + Debug,
+        R: tokio::io::AsyncRead + Send + Sync + Unpin + 'static,
+    >(
         &self,
         user: &ReoUser,
         input: R,
@@ -487,9 +486,7 @@ impl StorageBackend<ReoUser> for ReoBackend {
 
         // Normal path: resolve via scope and apply append-only store.
         let view = user_view(user);
-        let real_final = view
-            .resolve(virt)
-            .map_err(path_err_to_storage)?;
+        let real_final = view.resolve(virt).map_err(path_err_to_storage)?;
 
         store_stream(&real_final, start_pos, input)
             .await
@@ -511,12 +508,8 @@ impl StorageBackend<ReoUser> for ReoBackend {
             return Err(ErrorKind::PermissionDenied.into());
         }
         let view = user_view(user);
-        let real = view
-            .resolve(path.as_ref())
-            .map_err(path_err_to_storage)?;
-        tokio::fs::create_dir_all(&real)
-            .await
-            .map_err(Error::from)
+        let real = view.resolve(path.as_ref()).map_err(path_err_to_storage)?;
+        tokio::fs::create_dir_all(&real).await.map_err(Error::from)
     }
 
     // -----------------------------------------------------------------------
@@ -557,9 +550,7 @@ impl StorageBackend<ReoUser> for ReoBackend {
         }
 
         let view = user_view(user);
-        let real = view
-            .resolve(virt)
-            .map_err(path_err_to_storage)?;
+        let real = view.resolve(virt).map_err(path_err_to_storage)?;
 
         let m = tokio::fs::metadata(&real).await.map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -605,9 +596,12 @@ impl StorageBackend<unftp_core::auth::DefaultUser> for ReoBackend {
         &self,
         _u: &unftp_core::auth::DefaultUser,
         _p: P,
-    ) -> unftp_core::storage::Result<Vec<unftp_core::storage::Fileinfo<std::path::PathBuf, Self::Metadata>>>
+    ) -> unftp_core::storage::Result<
+        Vec<unftp_core::storage::Fileinfo<std::path::PathBuf, Self::Metadata>>,
+    >
     where
-        <Self as StorageBackend<unftp_core::auth::DefaultUser>>::Metadata: unftp_core::storage::Metadata,
+        <Self as StorageBackend<unftp_core::auth::DefaultUser>>::Metadata:
+            unftp_core::storage::Metadata,
     {
         Err(unftp_core::storage::ErrorKind::PermissionDenied.into())
     }
@@ -621,7 +615,10 @@ impl StorageBackend<unftp_core::auth::DefaultUser> for ReoBackend {
         Err(unftp_core::storage::ErrorKind::PermissionDenied.into())
     }
 
-    async fn put<P: AsRef<std::path::Path> + Send + std::fmt::Debug, R: tokio::io::AsyncRead + Send + Sync + Unpin + 'static>(
+    async fn put<
+        P: AsRef<std::path::Path> + Send + std::fmt::Debug,
+        R: tokio::io::AsyncRead + Send + Sync + Unpin + 'static,
+    >(
         &self,
         _u: &unftp_core::auth::DefaultUser,
         _i: R,
@@ -734,7 +731,9 @@ mod tests {
 
     #[test]
     fn uploader_allowed_ops() {
-        let role = Role::Uploader { home: PathBuf::from("/tmp") };
+        let role = Role::Uploader {
+            home: PathBuf::from("/tmp"),
+        };
         assert!(capability_allowed(&role, Op::Put));
         assert!(capability_allowed(&role, Op::Mkd));
         assert!(capability_allowed(&role, Op::List));
@@ -744,7 +743,9 @@ mod tests {
 
     #[test]
     fn uploader_denied_ops() {
-        let role = Role::Uploader { home: PathBuf::from("/tmp") };
+        let role = Role::Uploader {
+            home: PathBuf::from("/tmp"),
+        };
         assert!(!capability_allowed(&role, Op::Get));
         assert!(!capability_allowed(&role, Op::Del));
         assert!(!capability_allowed(&role, Op::Rmd));
@@ -820,9 +821,15 @@ mod tests {
         let data = b"hello world";
         let bytes = store_stream(&final_path, 0, &data[..]).await.unwrap();
         assert_eq!(bytes, data.len() as u64);
-        assert!(final_path.exists(), "final file must exist after store_stream");
+        assert!(
+            final_path.exists(),
+            "final file must exist after store_stream"
+        );
         let staging = append::staging_path(&final_path);
-        assert!(!staging.exists(), "staging file must be removed after rename");
+        assert!(
+            !staging.exists(),
+            "staging file must be removed after rename"
+        );
         let contents = std::fs::read(&final_path).unwrap();
         assert_eq!(contents, data);
     }
@@ -841,7 +848,9 @@ mod tests {
         std::fs::remove_file(&final_path).unwrap();
         std::fs::write(&staging, b"hello").unwrap();
         // Now attempt overlap: start_pos=3 < existing=5.
-        let err = store_stream(&final_path, 3, &b" world"[..]).await.unwrap_err();
+        let err = store_stream(&final_path, 3, &b" world"[..])
+            .await
+            .unwrap_err();
         assert!(matches!(err, StoreError::Overlap));
         assert!(!staging.exists(), "staging must be discarded on overlap");
     }
@@ -852,8 +861,10 @@ mod tests {
         let final_path = dir.path().join("clip.mp4");
         let staging = append::staging_path(&final_path);
         std::fs::write(&staging, b"hello").unwrap(); // 5 bytes in staging
-        // Gap: start_pos=10 > existing=5.
-        let err = store_stream(&final_path, 10, &b"world"[..]).await.unwrap_err();
+                                                     // Gap: start_pos=10 > existing=5.
+        let err = store_stream(&final_path, 10, &b"world"[..])
+            .await
+            .unwrap_err();
         assert!(matches!(err, StoreError::Gap));
         assert!(!staging.exists(), "staging must be discarded on gap");
     }
@@ -892,11 +903,7 @@ mod tests {
         let home = dir.path().to_path_buf();
         // Create a real file, a staging file, and a quarantine dir.
         std::fs::write(home.join("clip.mp4"), b"data").unwrap();
-        std::fs::write(
-            home.join(format!("clip.mp4{}", STAGING_SUFFIX)),
-            b"partial",
-        )
-        .unwrap();
+        std::fs::write(home.join(format!("clip.mp4{}", STAGING_SUFFIX)), b"partial").unwrap();
         std::fs::create_dir(home.join(QUARANTINE_DIR)).unwrap();
 
         let u = uploader(home);
@@ -906,7 +913,10 @@ mod tests {
             .iter()
             .map(|fi| fi.path.to_string_lossy().into_owned())
             .collect();
-        assert!(names.contains(&"clip.mp4".to_string()), "clip.mp4 should be visible");
+        assert!(
+            names.contains(&"clip.mp4".to_string()),
+            "clip.mp4 should be visible"
+        );
         assert!(
             !names.iter().any(|n| n.ends_with(STAGING_SUFFIX)),
             "staging files must be hidden"
@@ -1023,7 +1033,10 @@ mod tests {
     async fn put_nontest_name_never_quarantined() {
         use crate::append::is_reolink_test_file;
         // Verify name classification.
-        assert!(!is_reolink_test_file("clip.mp4"), "clip.mp4 must not be a test file");
+        assert!(
+            !is_reolink_test_file("clip.mp4"),
+            "clip.mp4 must not be a test file"
+        );
 
         let dir = tempdir().unwrap();
         let home = dir.path().to_path_buf();
@@ -1036,7 +1049,10 @@ mod tests {
             .unwrap();
 
         // File lands at the real path, not in quarantine.
-        assert!(home.join("clip.mp4").exists(), "clip.mp4 must be at real path");
+        assert!(
+            home.join("clip.mp4").exists(),
+            "clip.mp4 must be at real path"
+        );
         // No quarantine directory should have been created.
         assert!(
             !home.join(QUARANTINE_DIR).exists(),
@@ -1053,7 +1069,10 @@ mod tests {
         let m = Meta::SynthDir;
         assert!(m.is_dir(), "SynthDir must report is_dir() == true");
         assert!(!m.is_file(), "SynthDir must report is_file() == false");
-        assert!(!m.is_symlink(), "SynthDir must report is_symlink() == false");
+        assert!(
+            !m.is_symlink(),
+            "SynthDir must report is_symlink() == false"
+        );
         assert_eq!(m.len(), 0, "SynthDir must report len() == 0");
         let modified = m.modified();
         assert!(modified.is_ok(), "SynthDir modified() must be Ok");

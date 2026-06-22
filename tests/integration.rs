@@ -72,15 +72,12 @@ fn connect_ftp(port: u16) -> FtpStream {
 /// carries the numeric FTP reply code.  A 5xx code means the server issued
 /// a Permanent Negative Completion Reply — this is what we need to verify
 /// for security-enforcement assertions.
-fn assert_server_rejected<T: std::fmt::Debug>(
-    result: Result<T, suppaftp::FtpError>,
-    what: &str,
-) {
+fn assert_server_rejected<T: std::fmt::Debug>(result: Result<T, suppaftp::FtpError>, what: &str) {
     match result {
         Err(suppaftp::FtpError::UnexpectedResponse(resp)) => {
             let code = resp.status.code();
             assert!(
-                code >= 500 && code < 600,
+                (500..600).contains(&code),
                 "{what}: expected a 5xx server rejection, got reply {:?} (code {})",
                 resp,
                 code
@@ -169,7 +166,8 @@ scope = "all"
         let expected_clip_path = root.join("front-door").join("clip.mp4");
         assert!(
             expected_clip_path.exists(),
-            "assertion 1 failed: clip.mp4 must exist at {}", expected_clip_path.display()
+            "assertion 1 failed: clip.mp4 must exist at {}",
+            expected_clip_path.display()
         );
         let contents = std::fs::read(&expected_clip_path).expect("read clip.mp4");
         assert_eq!(
@@ -179,7 +177,10 @@ scope = "all"
 
         // Assertion 2: STOR same name again -> server 5xx (no overwrite)
         let result = ftp.put_file("clip.mp4", &mut Cursor::new(b"overwrite" as &[u8]));
-        assert_server_rejected(result, "assertion 2: second STOR of clip.mp4 (no overwrite)");
+        assert_server_rejected(
+            result,
+            "assertion 2: second STOR of clip.mp4 (no overwrite)",
+        );
         // Verify file was NOT modified by the rejected STOR.
         let after = std::fs::read(&expected_clip_path).expect("re-read clip.mp4");
         assert_eq!(
@@ -211,7 +212,8 @@ scope = "all"
         let expected_sub = root.join("front-door").join("sub").join("c2.mp4");
         assert!(
             expected_sub.exists(),
-            "assertion 5b failed: sub/c2.mp4 must exist at {}", expected_sub.display()
+            "assertion 5b failed: sub/c2.mp4 must exist at {}",
+            expected_sub.display()
         );
 
         // Assertion 6: RMD sub -> server 5xx (uploader cannot rmdir)
@@ -234,7 +236,8 @@ scope = "all"
         let quarantine_path = root.join("front-door").join(".quarantine").join("test.txt");
         assert!(
             quarantine_path.exists(),
-            "assertion 7c failed: test.txt must be in .quarantine/, path: {}", quarantine_path.display()
+            "assertion 7c failed: test.txt must be in .quarantine/, path: {}",
+            quarantine_path.display()
         );
         let root_path = root.join("front-door").join("test.txt");
         assert!(

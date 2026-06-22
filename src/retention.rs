@@ -29,7 +29,15 @@ pub fn sweep(
     dry_run: bool,
 ) -> std::io::Result<SweepReport> {
     let mut report = SweepReport::default();
-    visit(root, retention, quarantine_ttl, staging_ttl, now, dry_run, &mut report)?;
+    visit(
+        root,
+        retention,
+        quarantine_ttl,
+        staging_ttl,
+        now,
+        dry_run,
+        &mut report,
+    )?;
     Ok(report)
 }
 
@@ -42,13 +50,24 @@ fn visit(
     dry_run: bool,
     report: &mut SweepReport,
 ) -> std::io::Result<()> {
-    let in_quarantine = dir.file_name().map(|n| n == QUARANTINE_DIR).unwrap_or(false);
+    let in_quarantine = dir
+        .file_name()
+        .map(|n| n == QUARANTINE_DIR)
+        .unwrap_or(false);
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         let ft = entry.file_type()?;
         if ft.is_dir() {
-            visit(&path, retention, quarantine_ttl, staging_ttl, now, dry_run, report)?;
+            visit(
+                &path,
+                retention,
+                quarantine_ttl,
+                staging_ttl,
+                now,
+                dry_run,
+                report,
+            )?;
             // prune if emptied
             if std::fs::read_dir(&path)?.next().is_none() {
                 report.pruned_dirs.push(path.clone());
@@ -98,7 +117,7 @@ mod tests {
         fs::write(&old, b"x").unwrap();
         fs::write(&new, b"y").unwrap();
         set_mtime(&old, Duration::from_secs(40 * 86400));
-        set_mtime(&new, Duration::from_secs(1 * 86400));
+        set_mtime(&new, Duration::from_secs(86400));
 
         let r = sweep(
             d.path(),
@@ -107,7 +126,8 @@ mod tests {
             Duration::from_secs(3600),
             SystemTime::now(),
             false,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(!old.exists());
         assert!(new.exists());
@@ -120,7 +140,15 @@ mod tests {
         let f = d.path().join("old.mp4");
         fs::write(&f, b"x").unwrap();
         set_mtime(&f, Duration::from_secs(40 * 86400));
-        let r = sweep(d.path(), Duration::from_secs(30*86400), Duration::from_secs(3600), Duration::from_secs(3600), SystemTime::now(), true).unwrap();
+        let r = sweep(
+            d.path(),
+            Duration::from_secs(30 * 86400),
+            Duration::from_secs(3600),
+            Duration::from_secs(3600),
+            SystemTime::now(),
+            true,
+        )
+        .unwrap();
         assert!(f.exists());
         assert_eq!(r.deleted.len(), 1); // reported but not removed
     }

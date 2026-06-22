@@ -71,11 +71,16 @@ new_conns_per_min_per_ip = 10
 # Close idle control connections after this many seconds (active server-side).
 idle_timeout_secs = 120
 
-# Minimum sustained transfer rate; connections that fall below this for a
-# sustained period may be dropped.
+# Minimum sustained transfer rate.
+# NOTE: this field is parsed but NOT yet enforced server-side (reserved for
+# future Slowloris/slow-connection defence).  It has no effect at runtime.
 min_transfer_rate_bytes_per_sec = 1024
 
 # Brute-force login lockout (active server-side via libunftp failed-login policy).
+# max_attempts / window_secs are honored: after max_attempts failures within
+# window_secs the account/IP pair is locked.
+# NOTE: ban_secs is parsed but NOT currently honored — libunftp's built-in
+# FailedLoginsPolicy has no ban-duration parameter.  Reserved for future use.
 failed_login_lockout = { max_attempts = 5, window_secs = 300, ban_secs = 900 }
 
 # ---------------------------------------------------------------------------

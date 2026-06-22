@@ -44,11 +44,7 @@ async fn main() -> anyhow::Result<()> {
         // ------------------------------------------------------------------
         // cleanup: run retention sweep (synchronous; called inside async fn).
         // ------------------------------------------------------------------
-        Command::Cleanup {
-            config,
-            once: _,
-            dry_run,
-        } => {
+        Command::Cleanup { config, dry_run } => {
             let cfg = reoftpd::config::load(&config)?;
             let retention = Duration::from_secs(cfg.archive.retention_days * 86_400);
             // TTLs for quarantine and staging directories. Not carried in the
@@ -87,14 +83,10 @@ async fn main() -> anyhow::Result<()> {
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|_| std::path::PathBuf::from("/etc/reoftpd/reoftpd.toml"));
             let password = read_password(&format!("Password for camera {name}: "))?;
-            let hash = reoftpd::hashing::hash_password(&password)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            let snippet = reoftpd::cli::render_camera_entry(
-                &name,
-                username.as_deref(),
-                &hash,
-                require_tls,
-            );
+            let hash =
+                reoftpd::hashing::hash_password(&password).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let snippet =
+                reoftpd::cli::render_camera_entry(&name, username.as_deref(), &hash, require_tls);
             let mut f = std::fs::OpenOptions::new()
                 .append(true)
                 .open(&config)
@@ -111,8 +103,8 @@ async fn main() -> anyhow::Result<()> {
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|_| std::path::PathBuf::from("/etc/reoftpd/reoftpd.toml"));
             let password = read_password(&format!("Password for viewer {name}: "))?;
-            let hash = reoftpd::hashing::hash_password(&password)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let hash =
+                reoftpd::hashing::hash_password(&password).map_err(|e| anyhow::anyhow!("{e}"))?;
             let snippet = reoftpd::cli::render_viewer_entry(&name, &hash, &scope);
             let mut f = std::fs::OpenOptions::new()
                 .append(true)
@@ -127,8 +119,8 @@ async fn main() -> anyhow::Result<()> {
         // ------------------------------------------------------------------
         Command::HashPassword => {
             let password = read_password("Password: ")?;
-            let hash = reoftpd::hashing::hash_password(&password)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let hash =
+                reoftpd::hashing::hash_password(&password).map_err(|e| anyhow::anyhow!("{e}"))?;
             println!("{hash}");
         }
 

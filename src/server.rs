@@ -41,9 +41,9 @@
 //!    exposes no per-connection accept hook through the public `listen` API.
 //!    Brute-force lockout IS handled by the built-in `failed_logins_policy` (wired
 //!    below). Connection-flood caps rely on the firewall layer (nftables) per the
-//!    design's DoS section. `limits::LoginTracker` is superseded by
-//!    `failed_logins_policy`; `limits::ConnTracker` is currently unwired. Both are
-//!    flagged for the final review (keep-vs-remove decision deferred to that task).
+//!    design's DoS section. `limits::ConnTracker` is currently unwired (no
+//!    per-connection accept hook in libunftp 0.23's public API). The superseded
+//!    `LoginTracker` was removed in the final pre-merge cleanup.
 
 use crate::account::{self, Accounts};
 use crate::auth::{ReoAuth, ReoUser, ReoUserProvider};
@@ -80,24 +80,23 @@ pub fn build_server(
     //   The stub impl in backend.rs satisfies that bound.
     // Step 2: user_detail_provider — switches User from DefaultUser to ReoUser.
     //   After this point the builder is ServerBuilder<ReoBackend, ReoUser>.
-    let mut builder = libunftp::ServerBuilder::with_authenticator(
-        Box::new(|| ReoBackend),
-        auth,
-    )
-    .user_detail_provider(provider)
-    .passive_ports(cfg.server.passive_ports[0]..=cfg.server.passive_ports[1])
-    .idle_session_timeout(cfg.limits.idle_timeout_secs)
-    .failed_logins_policy(FailedLoginsPolicy::new(
-        lk.max_attempts,
-        Duration::from_secs(lk.window_secs),
-        FailedLoginsBlock::UserAndIP,
-    ));
+    let mut builder = libunftp::ServerBuilder::with_authenticator(Box::new(|| ReoBackend), auth)
+        .user_detail_provider(provider)
+        .passive_ports(cfg.server.passive_ports[0]..=cfg.server.passive_ports[1])
+        .idle_session_timeout(cfg.limits.idle_timeout_secs)
+        .failed_logins_policy(FailedLoginsPolicy::new(
+            lk.max_attempts,
+            Duration::from_secs(lk.window_secs),
+            FailedLoginsBlock::UserAndIP,
+        ));
 
     if let (Some(cert), Some(key)) = (cfg.server.tls_cert.clone(), cfg.server.tls_key.clone()) {
         builder = builder.ftps(cert, key);
     }
 
-    builder.build().context("libunftp ServerBuilder::build failed")
+    builder
+        .build()
+        .context("libunftp ServerBuilder::build failed")
 }
 
 // ---------------------------------------------------------------------------
@@ -172,13 +171,11 @@ pub fn resolve_user(name: &str) -> Result<UserIds, String> {
 /// internally and a prebound-socket handoff is not available via the public
 /// libunftp 0.23 API. See module-level documentation.
 pub fn drop_privileges(name: &str) -> Result<(), String> {
-    use nix::unistd::{Gid, Uid, setgid, setuid};
+    use nix::unistd::{setgid, setuid, Gid, Uid};
     let ids = resolve_user(name)?;
     // setgid first — once setuid is called we may lose the ability to setgid.
-    setgid(Gid::from_raw(ids.gid))
-        .map_err(|e| format!("setgid to {} failed: {e}", ids.gid))?;
-    setuid(Uid::from_raw(ids.uid))
-        .map_err(|e| format!("setuid to {} failed: {e}", ids.uid))?;
+    setgid(Gid::from_raw(ids.gid)).map_err(|e| format!("setgid to {} failed: {e}", ids.gid))?;
+    setuid(Uid::from_raw(ids.uid)).map_err(|e| format!("setuid to {} failed: {e}", ids.uid))?;
     Ok(())
 }
 
