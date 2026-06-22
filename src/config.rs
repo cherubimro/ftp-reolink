@@ -60,6 +60,8 @@ pub struct LimitsCfg {
     pub idle_timeout_secs: u64,
     pub min_transfer_rate_bytes_per_sec: u64,
     pub failed_login_lockout: LockoutCfg,
+    #[serde(default)]
+    pub max_connections_per_account: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -302,5 +304,21 @@ scope = ["outdoor"]
         let bad = format!("{SAMPLE}\n[[viewer]]\nname = \"front-door\"\npassword_hash = \"$argon2id$c\"\nscope = \"all\"\n");
         let c = parse_str(&bad).unwrap();
         assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn max_connections_per_account_defaults_to_none() {
+        let c = parse_str(SAMPLE).unwrap();
+        assert_eq!(c.limits.max_connections_per_account, None);
+    }
+
+    #[test]
+    fn max_connections_per_account_parses_when_present() {
+        let with = SAMPLE.replace(
+            "max_connections_per_ip = 8",
+            "max_connections_per_ip = 8\nmax_connections_per_account = 4",
+        );
+        let c = parse_str(&with).unwrap();
+        assert_eq!(c.limits.max_connections_per_account, Some(4));
     }
 }
