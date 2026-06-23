@@ -129,13 +129,39 @@ FTP is not designed for hostile networks.  The strongest mitigation is binding
 `listen` in `[server]` to a private IP (e.g. `192.168.1.10`) and ensuring the
 port is not reachable from outside your network.
 
-Connection-flood rate limits (`max_connections`, `max_connections_per_ip`,
-`new_conns_per_min_per_ip`) and `min_transfer_rate_bytes_per_sec` are parsed
-and stored but are not yet wired into the server.  Enforce flood limits at the
-firewall layer (nftables `limit rate` / `meter` rules).  In-server brute-force
-lockout (`failed_login_lockout`) and idle connection timeout
-(`idle_timeout_secs`) are active.  Note that `failed_login_lockout.ban_secs`
-is parsed but not yet honored — see the Security guarantees section.
+### In-process connection caps (enforced server-side)
+
+The following limits are checked in-process and are fully enforced at login time:
+
+- `max_connections` — global concurrent-session cap; logins are refused (530)
+  once this many sessions are active.  The counter is decremented automatically
+  when a session ends.
+- `max_connections_per_account` — per-camera concurrent-session cap; logins for
+  a single camera account are refused once this many sessions are active for
+  that account.
+- `idle_timeout_secs` — idle control connections are closed after this many
+  seconds.
+- `failed_login_lockout` — brute-force lockout tracked per IP and username
+  (`ban_secs` is parsed but not yet honored — see the Security guarantees
+  section).
+
+### Per-IP rate limits (firewall via nftables)
+
+`max_connections_per_ip` and `new_conns_per_min_per_ip` are enforced at the
+firewall layer, not in-process.  reoftpd can generate the nftables rules
+automatically from your config:
+
+```sh
+reoftpd nftables --config /etc/reoftpd/reoftpd.toml | sudo nft -f -
+```
+
+This outputs a ready-to-apply nftables ruleset using `meter` statements to
+enforce per-IP connection counts and new-connection rates.  Verify the
+generated syntax against your installed `nft` version before applying; nft
+syntax for `meter` varies between versions.
+
+`min_transfer_rate_bytes_per_sec` is parsed and stored but is not yet enforced
+in-process (reserved for future Slowloris / slow-connection defence).
 
 ## Configure your Reolink camera
 
@@ -182,6 +208,37 @@ Apply config changes (account additions, etc.) by restarting the service:
 systemctl restart reoftpd
 ```
 
+## Live config reload
+
+Editing the config and sending `SIGHUP` reloads cameras, viewers, groups, and
+connection caps without dropping any active connections:
+
+```sh
+# Using systemd (preferred)
+systemctl reload reoftpd
+
+# Or directly
+kill -HUP $(cat /var/run/reoftpd.pid)
+# or: kill -HUP <pid>
+```
+
+**What reloads without a restart** (live SIGHUP):
+
+- Camera accounts (`[[camera]]`) and viewer accounts (`[[viewer]]`)
+- Group definitions (`[group]`)
+- Connection caps (`max_connections`, `max_connections_per_account`)
+
+**What still requires a full restart** (cannot hot-reload):
+
+- `listen` address/port, `passive_ports`
+- TLS certificate/key paths (`tls_cert`, `tls_key`)
+- `idle_timeout_secs`
+- `failed_login_lockout` parameters
+
+If the reloaded config contains a parse or validation error, reoftpd logs the
+error and continues running with the previous configuration — a bad edit cannot
+take down the server.
+
 ## Known limitations
 
 - **No in-process privilege drop**: libunftp binds the listening port
@@ -190,17 +247,17 @@ systemctl restart reoftpd
   granted only `CAP_NET_BIND_SERVICE` via the systemd unit
   (`AmbientCapabilities`).  Running as root is not supported and not necessary.
 
-- **No live config reload (SIGHUP)**: account changes and other configuration
-  edits take effect only after `systemctl restart reoftpd`.  A `SIGHUP` reload
-  path is not yet implemented.
+- **Partial live config reload**: `SIGHUP` reloads accounts and connection caps
+  without dropping connections, but several settings (bind address/port, passive
+  ports, TLS, idle timeout, failed-login lockout) still require a restart.  See
+  the "Live config reload" section above.
 
-- **Per-IP / global connection caps not yet enforced server-side**: the
-  `max_connections`, `max_connections_per_ip`, `new_conns_per_min_per_ip`, and
-  `min_transfer_rate_bytes_per_sec` fields are parsed and validated but are not
-  yet wired into the server.  Use firewall rules to enforce connection-rate
-  limits; slow-connection (Slowloris) defence is not yet implemented in-process.
-  The in-server controls that _are_ active are `idle_timeout_secs` and
-  `failed_login_lockout` (see note above regarding `ban_secs`).
+- **Per-IP connection caps at the firewall only**: `max_connections_per_ip` and
+  `new_conns_per_min_per_ip` are not enforced in-process — libunftp 0.23
+  provides no peer IP at session end, making in-process per-IP accounting
+  unreliable.  Use `reoftpd nftables ... | sudo nft -f -` to apply firewall
+  rules.  `min_transfer_rate_bytes_per_sec` is also not yet enforced in-process
+  (reserved for future Slowloris defence).
 
 - **Passive port advertisement**: on a NAT'd network, you may need to configure
   the external IP for passive-mode responses.  This is not currently

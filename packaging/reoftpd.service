@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 ExecStart=/usr/local/bin/reoftpd serve --config /etc/reoftpd/reoftpd.toml
+ExecReload=/bin/kill -HUP $MAINPID
 User=reoftpd
 Group=reoftpd
 # libunftp binds the port internally with no in-process privilege drop,

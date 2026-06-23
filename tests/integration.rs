@@ -290,3 +290,95 @@ scope = "all"
     // Keep dir alive until end so the archive is not deleted under the server.
     drop(dir);
 }
+
+// ---------------------------------------------------------------------------
+// Session-cap test
+// ---------------------------------------------------------------------------
+
+/// With `max_connections = 1`, a second login is refused while the first holds
+/// the slot; after the first session closes a new login succeeds.
+#[test]
+fn global_session_cap_refuses_second_login() {
+    // ---- Build config ----
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+
+    let cam_hash = reoftpd::hashing::hash_password("pw").expect("cam hash");
+
+    let ctrl = free_port();
+    let pasv_lo = free_port();
+    let pasv_hi = pasv_lo + 30;
+
+    let toml = format!(
+        r#"
+[server]
+listen = "127.0.0.1"
+port = {ctrl}
+passive_ports = [{pasv_lo}, {pasv_hi}]
+
+[archive]
+root = "{root}"
+retention_days = 30
+
+[limits]
+max_connections = 1
+max_connections_per_ip = 8
+new_conns_per_min_per_ip = 60
+idle_timeout_secs = 30
+min_transfer_rate_bytes_per_sec = 1
+# Keep lockout threshold very high so the refused login doesn't trip it.
+failed_login_lockout = {{ max_attempts = 50, window_secs = 60, ban_secs = 60 }}
+
+[[camera]]
+name = "front-door"
+upload_password_hash = "{cam_hash}"
+"#,
+        root = root.display()
+    );
+
+    let cfg = reoftpd::config::parse_str(&toml).expect("parse config");
+    cfg.validate().expect("validate config");
+
+    // ---- Start the server on a background thread ----
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dummy_path = std::path::PathBuf::from("/dev/null");
+        let _ = rt.block_on(reoftpd::server::run(cfg, dummy_path));
+    });
+
+    wait_for_port(ctrl);
+
+    // ---- First session logs in and stays open ----
+    let mut ftp1 = connect_ftp(ctrl);
+    ftp1.login("front-door", "pw")
+        .expect("first login must succeed");
+    // PWD ensures the session is fully established and LoggedIn has been dispatched.
+    let _ = ftp1.pwd().unwrap();
+
+    // Give the presence event a moment to register (LoggedIn fires just after auth).
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // ---- Second login must be refused while the first holds the only slot ----
+    let mut ftp2 = suppaftp::FtpStream::connect(("127.0.0.1", ctrl)).unwrap();
+    let second = ftp2.login("front-door", "pw");
+    assert!(
+        second.is_err(),
+        "second login should be refused at global cap = 1, got: {:?}",
+        second.ok()
+    );
+
+    // ---- Close the first; a new login then succeeds ----
+    ftp1.quit().ok();
+    // Give the LoggedOut event time to decrement the counter.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    let mut ftp3 = connect_ftp(ctrl);
+    assert!(
+        ftp3.login("front-door", "pw").is_ok(),
+        "login should succeed after the first session closed"
+    );
+    ftp3.quit().ok();
+
+    // Keep dir alive until end.
+    drop(dir);
+}

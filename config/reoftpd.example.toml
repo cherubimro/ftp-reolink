@@ -55,17 +55,23 @@ retention_days = 30
 # [limits] — connection and rate controls
 # ---------------------------------------------------------------------------
 [limits]
-# Maximum simultaneous connections across all clients.
-# NOTE: this field is parsed but the per-IP / global connection caps are not
-# yet wired into the accept loop.  Use your firewall (nftables) to enforce
-# flood limits.  Only idle_timeout_secs and failed_login_lockout are active
-# server-side.
+# Global concurrent-session cap — enforced in-process.
+# Logins are refused (530) once this many sessions are active simultaneously.
+# The counter is decremented automatically when a session ends (LoggedOut event).
 max_connections = 64
 
+# Per-camera concurrent-session cap — enforced in-process.
+# Logins for a single camera account are refused once this many sessions are
+# active for that account.  Leave commented out for no per-account limit.
+max_connections_per_account = 4
+
 # Maximum simultaneous connections from a single IP address.
+# NOTE: enforced at the firewall via generated nftables rules, NOT in-process.
+# See: reoftpd nftables --config /etc/reoftpd/reoftpd.toml | sudo nft -f -
 max_connections_per_ip = 4
 
 # Maximum new connections per minute from a single IP address.
+# NOTE: enforced at the firewall via generated nftables rules, NOT in-process.
 new_conns_per_min_per_ip = 10
 
 # Close idle control connections after this many seconds (active server-side).
