@@ -31,18 +31,100 @@ access.
   individual camera accounts can set `require_tls = true` to make TLS
   mandatory.
 
-## Build
+## Get the code
+
+There is no public git remote yet, so pick one of these to get the source onto
+your machine:
 
 ```sh
-cargo build --release
+# A. Clone from your own git host (once the repo has been pushed there).
+#    dev.cs.upt.ro is HTTPS-only:
+git clone https://dev.cs.upt.ro/<you>/ftp-reolink.git
+cd ftp-reolink
+
+# B. Copy it directly from a machine that already has it (no remote needed).
+#    Exclude the build dir; it is large and host-specific:
+rsync -a --exclude target --exclude .git ./ftp-reolink/ user@vps:~/ftp-reolink/
+
+# C. Air-gapped: ship the whole history as a single file.
+#    On the source machine:
+git bundle create reoftpd.bundle --all
+#    Copy reoftpd.bundle to the target, then:
+git clone reoftpd.bundle ftp-reolink && cd ftp-reolink
 ```
 
-The resulting binary is at `target/release/reoftpd`.
+## Build
 
-**FreeBSD note**: FreeBSD is a Tier-2 Rust target.  The binary links against
-the system libc by default.  For a more portable build, cross-compile with a
-musl-libc target or set `RUSTFLAGS="-C target-feature=+crt-static"` with an
-appropriate target triple.
+The crate needs **Rust 1.88+** (it pins toolchain 1.96.0 via `rust-toolchain.toml`,
+which `rustup` fetches automatically). A distro's packaged `rustc` on an old
+machine is usually too old — use `rustup`. Building needs roughly **1–2 GB RAM**
+and ~2 GB disk for `target/`; the final binary is a few MB.
+
+There are two ways to build. On a small/old box, **Strategy B (build elsewhere,
+copy the binary)** is the easy path — no toolchain or compile load on the VPS,
+and the static binary runs even on ancient userland.
+
+### Strategy A — compile on the machine
+
+**Linux:**
+
+```sh
+# Install the Rust toolchain (rustup), not the distro's old rustc:
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+. "$HOME/.cargo/env"
+
+cargo build --release            # toolchain 1.96.0 is auto-installed on first build
+# -> target/release/reoftpd
+```
+
+On a VPS with **< 1 GB RAM** the final link step (tokio/rustls/argon2) can OOM.
+Add temporary swap and reduce parallelism:
+
+```sh
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+cargo build --release -j1        # fewer parallel jobs = lower peak RAM
+sudo swapoff /swapfile && sudo rm /swapfile   # afterwards
+```
+
+**FreeBSD** (a Tier-2 Rust target):
+
+```sh
+pkg install rust                 # ensure `rustc --version` >= 1.88; else use rustup
+cargo build --release
+# For a more self-contained binary:
+RUSTFLAGS="-C target-feature=+crt-static" cargo build --release
+```
+
+### Strategy B — build elsewhere, copy the binary (recommended for old/small VPS)
+
+Build a self-contained binary on a capable machine, then copy just that one file.
+
+**Linux (fully-static via musl** — runs on any glibc version, however old**):**
+
+```sh
+# On the build host (with rustup):
+rustup target add x86_64-unknown-linux-musl       # or aarch64-unknown-linux-musl for ARM
+# musl needs its linker for any C deps; this project's crypto is pure Rust, but if a
+# build complains, install it:  Debian/Ubuntu: apt-get install musl-tools
+cargo build --release --target x86_64-unknown-linux-musl
+
+# Confirm it is fully static, then copy the single binary to the VPS:
+ldd target/x86_64-unknown-linux-musl/release/reoftpd   # -> "not a dynamic executable"
+scp target/x86_64-unknown-linux-musl/release/reoftpd user@vps:/tmp/reoftpd
+# On the VPS:  sudo install -o root -g root -m0755 /tmp/reoftpd /usr/local/bin/reoftpd
+```
+
+For **ARM** (`aarch64-unknown-linux-musl`), build natively on an ARM box, or
+cross-link from x86 with `apt-get install gcc-aarch64-linux-gnu` plus a cargo
+linker setting — native ARM is simpler.
+
+**FreeBSD:** cross-compiling to FreeBSD from Linux needs a sysroot and is fiddly;
+build on a FreeBSD host of the **same major version** as the target with
+`RUSTFLAGS="-C target-feature=+crt-static" cargo build --release`, then copy
+`target/release/reoftpd`.
+
+Verify the copied binary on the target with `reoftpd --help`.
 
 ## Install
 
