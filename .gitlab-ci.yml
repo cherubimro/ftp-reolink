@@ -1,0 +1,83 @@
+# GitLab CI for reoftpd (dev.cs.upt.ro is GitLab).
+#
+# - check : rustfmt + clippy (-D warnings) + tests
+# - build : fully-static x86_64 Linux binary, published as a job artifact
+# - release (tags only): upload the binary to the package registry + cut a Release
+#
+# The toolchain is pinned to 1.96.0 by rust-toolchain.toml, so rustup fetches it
+# automatically regardless of the base image version.
+
+stages:
+  - check
+  - build
+  - release
+
+variables:
+  CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+  CARGO_TERM_COLOR: "never"
+
+# Only run pipelines for branches, tags, and merge requests (avoid duplicates).
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_BRANCH'
+
+default:
+  image: rust:1.96
+  cache:
+    key: "cargo-$CI_COMMIT_REF_SLUG"
+    paths:
+      - .cargo/registry/
+      - target/
+
+check:
+  stage: check
+  script:
+    - rustup component add rustfmt clippy
+    - cargo fmt --all -- --check
+    - cargo clippy --all-targets --locked -- -D warnings
+    - cargo test --locked
+
+# Fully-static x86_64 Linux binary — runs on any glibc version, however old.
+build:musl-x86_64:
+  stage: build
+  script:
+    - apt-get update && apt-get install -y --no-install-recommends musl-tools
+    - rustup target add x86_64-unknown-linux-musl
+    - cargo build --release --locked --target x86_64-unknown-linux-musl
+    - install -D -m0755 target/x86_64-unknown-linux-musl/release/reoftpd dist/reoftpd-x86_64-musl
+    - ./dist/reoftpd-x86_64-musl --help        # smoke-test the static binary
+    - ldd dist/reoftpd-x86_64-musl || true      # expected: "not a dynamic executable"
+  artifacts:
+    name: "reoftpd-$CI_COMMIT_REF_SLUG-x86_64-musl"
+    paths:
+      - dist/reoftpd-x86_64-musl
+    expire_in: 30 days
+
+# On a git tag (e.g. v0.1.0): publish the binary to the Generic Package Registry
+# and create a GitLab Release linking to it.
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  rules:
+    - if: '$CI_COMMIT_TAG'
+  needs:
+    - job: build:musl-x86_64
+      artifacts: true
+  variables:
+    PKG_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/reoftpd/${CI_COMMIT_TAG}/reoftpd-x86_64-musl"
+  script:
+    - |
+      command -v curl >/dev/null 2>&1 || apk add --no-cache curl
+      curl --fail --silent --show-error \
+        --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+        --upload-file dist/reoftpd-x86_64-musl "${PKG_URL}"
+    - echo "uploaded ${PKG_URL}"
+  release:
+    tag_name: "$CI_COMMIT_TAG"
+    description: "reoftpd $CI_COMMIT_TAG — static x86_64-musl binary attached below."
+    assets:
+      links:
+        - name: "reoftpd-x86_64-musl"
+          url: "${PKG_URL}"
