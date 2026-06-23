@@ -38,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
         // ------------------------------------------------------------------
         Command::Serve { config } => {
             let cfg = reoftpd::config::load(&config)?;
-            reoftpd::server::run(cfg).await?;
+            reoftpd::server::run(cfg, config).await?;
         }
 
         // ------------------------------------------------------------------

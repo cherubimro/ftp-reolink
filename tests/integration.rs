@@ -145,7 +145,10 @@ scope = "all"
     // ---- 2. Start the server on a background thread ----
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let _ = rt.block_on(reoftpd::server::run(cfg));
+        // Pass a dummy path — this integration test builds config from a string
+        // so there is no file on disk for SIGHUP reload to read.
+        let dummy_path = std::path::PathBuf::from("/dev/null");
+        let _ = rt.block_on(reoftpd::server::run(cfg, dummy_path));
     });
 
     wait_for_port(ctrl);
