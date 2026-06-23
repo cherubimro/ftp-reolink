@@ -70,21 +70,33 @@ pub fn build_server(
 
     let lk = &cfg.limits.failed_login_lockout;
 
+    // Parse optional encryption recipients from config.
+    let recipients = match &cfg.encryption {
+        Some(enc) => Some(std::sync::Arc::new(
+            crate::crypto::parse_recipients(&enc.recipients)
+                .map_err(|e| anyhow::anyhow!("encryption recipients: {e}"))?,
+        )),
+        None => None,
+    };
+
     // Step 1: with_authenticator — requires Storage: StorageBackend<DefaultUser>.
     //   The stub impl in backend.rs satisfies that bound.
     // Step 2: user_detail_provider — switches User from DefaultUser to ReoUser.
     //   After this point the builder is ServerBuilder<ReoBackend, ReoUser>.
     // Step 3: notify_presence — wires the session tracker for login/logout events.
-    let mut builder = libunftp::ServerBuilder::with_authenticator(Box::new(|| ReoBackend), auth)
-        .user_detail_provider(provider)
-        .notify_presence(presence)
-        .passive_ports(cfg.server.passive_ports[0]..=cfg.server.passive_ports[1])
-        .idle_session_timeout(cfg.limits.idle_timeout_secs)
-        .failed_logins_policy(FailedLoginsPolicy::new(
-            lk.max_attempts,
-            Duration::from_secs(lk.window_secs),
-            FailedLoginsBlock::UserAndIP,
-        ));
+    let mut builder = libunftp::ServerBuilder::with_authenticator(
+        Box::new(move || ReoBackend::new(recipients.clone())),
+        auth,
+    )
+    .user_detail_provider(provider)
+    .notify_presence(presence)
+    .passive_ports(cfg.server.passive_ports[0]..=cfg.server.passive_ports[1])
+    .idle_session_timeout(cfg.limits.idle_timeout_secs)
+    .failed_logins_policy(FailedLoginsPolicy::new(
+        lk.max_attempts,
+        Duration::from_secs(lk.window_secs),
+        FailedLoginsBlock::UserAndIP,
+    ));
 
     if let (Some(cert), Some(key)) = (cfg.server.tls_cert.clone(), cfg.server.tls_key.clone()) {
         builder = builder.ftps(cert, key);

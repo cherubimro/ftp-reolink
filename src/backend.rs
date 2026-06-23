@@ -291,12 +291,80 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// age_suffix + store_encrypted
+// ---------------------------------------------------------------------------
+
+/// Append the `.age` suffix to a resolved real path (clip.mp4 -> clip.mp4.age).
+pub fn age_suffix(path: &std::path::Path) -> std::path::PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(".age");
+    std::path::PathBuf::from(s)
+}
+
+/// On-the-fly encrypted store: stream `input` through age to a ciphertext staging
+/// file, then atomically finalize. Plaintext never lands on disk.
+pub async fn store_encrypted<R>(
+    real_final: &std::path::Path,
+    recipients: std::sync::Arc<Vec<age::x25519::Recipient>>,
+    input: R,
+) -> std::result::Result<u64, StoreError>
+where
+    R: tokio::io::AsyncRead + Send + Unpin + 'static,
+{
+    if tokio::fs::try_exists(real_final).await.unwrap_or(false) {
+        return Err(StoreError::Finalized);
+    }
+    let staging = crate::append::staging_path(real_final);
+    if let Some(parent) = staging.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(StoreError::Io)?;
+    }
+    let staging_for_task = staging.clone();
+    let bridge = tokio_util::io::SyncIoBridge::new(input); // created in async context
+    let n = tokio::task::spawn_blocking(
+        move || -> std::result::Result<u64, crate::crypto::CryptoError> {
+            let file = std::fs::File::create(&staging_for_task)?;
+            crate::crypto::encrypt_stream(&recipients, bridge, file)
+        },
+    )
+    .await
+    .map_err(|e| StoreError::Io(std::io::Error::other(e)))?
+    .map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
+
+    // Finalize: no-clobber hard link, same as the plaintext path.
+    match tokio::fs::hard_link(&staging, real_final).await {
+        Ok(()) => {
+            let _ = tokio::fs::remove_file(&staging).await;
+            Ok(n)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = tokio::fs::remove_file(&staging).await;
+            Err(StoreError::Finalized)
+        }
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&staging).await;
+            Err(StoreError::Io(e))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ReoBackend
 // ---------------------------------------------------------------------------
 
-/// Stateless storage backend — all per-user state lives in `ReoUser.role`.
+/// Storage backend holding optional encryption recipients.
+/// Per-user access state lives in `ReoUser.role`.
 #[derive(Debug)]
-pub struct ReoBackend;
+pub struct ReoBackend {
+    pub recipients: Option<std::sync::Arc<Vec<age::x25519::Recipient>>>,
+}
+
+impl ReoBackend {
+    pub fn new(recipients: Option<std::sync::Arc<Vec<age::x25519::Recipient>>>) -> Self {
+        ReoBackend { recipients }
+    }
+}
 
 #[async_trait]
 impl StorageBackend<ReoUser> for ReoBackend {
@@ -486,9 +554,20 @@ impl StorageBackend<ReoUser> for ReoBackend {
 
         // Normal path: resolve via scope and apply append-only store.
         let view = user_view(user);
-        let real_final = view.resolve(virt).map_err(path_err_to_storage)?;
+        let resolved = view.resolve(virt).map_err(path_err_to_storage)?;
 
-        store_stream(&real_final, start_pos, input)
+        if let Some(recipients) = &self.recipients {
+            if start_pos != 0 {
+                // REST/resume is not supported for encrypted uploads.
+                return Err(unftp_core::storage::ErrorKind::PermissionDenied.into());
+            }
+            let real_final = age_suffix(&resolved);
+            return store_encrypted(&real_final, recipients.clone(), input)
+                .await
+                .map_err(store_error_to_storage);
+        }
+
+        store_stream(&resolved, start_pos, input)
             .await
             .map_err(store_error_to_storage)
     }
@@ -907,7 +986,7 @@ mod tests {
         std::fs::create_dir(home.join(QUARANTINE_DIR)).unwrap();
 
         let u = uploader(home);
-        let backend = ReoBackend;
+        let backend = ReoBackend::new(None);
         let entries = backend.list(&u, Path::new("/")).await.unwrap();
         let names: Vec<_> = entries
             .iter()
@@ -936,7 +1015,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let scope = ScopeMap::single(dir.path().to_path_buf());
         let v = viewer(scope);
-        let backend = ReoBackend;
+        let backend = ReoBackend::new(None);
         let data: &[u8] = b"data";
         let result = backend.put(&v, data, Path::new("/clip.mp4"), 0).await;
         assert!(result.is_err());
@@ -952,7 +1031,7 @@ mod tests {
     async fn get_denied_for_uploader() {
         let dir = tempdir().unwrap();
         let u = uploader(dir.path().to_path_buf());
-        let backend = ReoBackend;
+        let backend = ReoBackend::new(None);
         let result = backend.get(&u, Path::new("/clip.mp4"), 0).await;
         assert!(result.is_err(), "expected Err for uploader get");
         // Extract error kind without requiring T: Debug.
@@ -971,7 +1050,7 @@ mod tests {
     async fn del_always_denied() {
         let dir = tempdir().unwrap();
         let u = uploader(dir.path().to_path_buf());
-        let backend = ReoBackend;
+        let backend = ReoBackend::new(None);
         let result = backend.del(&u, Path::new("/clip.mp4")).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::PermissionDenied);
@@ -981,7 +1060,7 @@ mod tests {
     async fn rmd_always_denied() {
         let dir = tempdir().unwrap();
         let u = uploader(dir.path().to_path_buf());
-        let backend = ReoBackend;
+        let backend = ReoBackend::new(None);
         let result = backend.rmd(&u, Path::new("/some-dir")).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), ErrorKind::PermissionDenied);
@@ -991,7 +1070,7 @@ mod tests {
     async fn rename_always_denied() {
         let dir = tempdir().unwrap();
         let u = uploader(dir.path().to_path_buf());
-        let backend = ReoBackend;
+        let backend = ReoBackend::new(None);
         let result = backend
             .rename(&u, Path::new("/a.mp4"), Path::new("/b.mp4"))
             .await;
@@ -1008,7 +1087,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let home = dir.path().to_path_buf();
         let u = uploader(home.clone());
-        let backend = ReoBackend;
+        let backend = ReoBackend::new(None);
         // First write.
         backend
             .put(&u, &b"test data"[..], Path::new("/test.txt"), 0)
@@ -1041,7 +1120,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let home = dir.path().to_path_buf();
         let u = uploader(home.clone());
-        let backend = ReoBackend;
+        let backend = ReoBackend::new(None);
 
         backend
             .put(&u, &b"video data"[..], Path::new("/clip.mp4"), 0)
@@ -1058,6 +1137,59 @@ mod tests {
             !home.join(QUARANTINE_DIR).exists(),
             "quarantine dir must not exist for normal file"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // store_encrypted tests (TDD: written before implementation)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn store_encrypted_writes_ciphertext_that_decrypts() {
+        use std::str::FromStr;
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("cam");
+        std::fs::create_dir_all(&home).unwrap();
+        let (pubkey, secret) = crate::crypto::generate_identity();
+        let recips = std::sync::Arc::new(crate::crypto::parse_recipients(&[pubkey]).unwrap());
+        let plaintext = b"camera footage bytes";
+
+        let final_path = home.join("clip.mp4.age");
+        let n = store_encrypted(&final_path, recips.clone(), &plaintext[..])
+            .await
+            .unwrap();
+        assert_eq!(n, plaintext.len() as u64);
+
+        let stored = std::fs::read(&final_path).unwrap();
+        assert_ne!(
+            stored.as_slice(),
+            &plaintext[..],
+            "stored file must be ciphertext, not plaintext"
+        );
+        assert!(
+            !home.join("clip.mp4.age.reoftpd-partial").exists(),
+            "staging cleaned"
+        );
+
+        // decrypts back to the original
+        let id = age::x25519::Identity::from_str(&secret).unwrap();
+        let mut out = Vec::new();
+        crate::crypto::decrypt_stream(&id, &stored[..], &mut out).unwrap();
+        assert_eq!(out, plaintext);
+    }
+
+    #[tokio::test]
+    async fn store_encrypted_refuses_existing_finalized() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("cam");
+        std::fs::create_dir_all(&home).unwrap();
+        let (pubkey, _) = crate::crypto::generate_identity();
+        let recips = std::sync::Arc::new(crate::crypto::parse_recipients(&[pubkey]).unwrap());
+        let p = home.join("clip.mp4.age");
+        store_encrypted(&p, recips.clone(), &b"a"[..])
+            .await
+            .unwrap();
+        let err = store_encrypted(&p, recips, &b"b"[..]).await.unwrap_err();
+        assert!(matches!(err, StoreError::Finalized));
     }
 
     // -----------------------------------------------------------------------
