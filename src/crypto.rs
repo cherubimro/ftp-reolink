@@ -94,11 +94,24 @@ pub fn decrypt_stream<R: Read, W: Write>(
     mut writer: W,
 ) -> Result<u64, CryptoError> {
     let decryptor = age::Decryptor::new(reader).map_err(|e| CryptoError::Decrypt(e.to_string()))?;
-    let mut stream_reader = decryptor
+    let mut out = decryptor
         .decrypt(std::iter::once(identity as &dyn age::Identity))
         .map_err(|e| CryptoError::Decrypt(e.to_string()))?;
-    let n = std::io::copy(&mut stream_reader, &mut writer)?;
-    Ok(n)
+    let mut buf = [0u8; 64 * 1024];
+    let mut total: u64 = 0;
+    loop {
+        // A read error here is a decryption/authentication failure (wrong key or tampered ciphertext).
+        let k = out
+            .read(&mut buf)
+            .map_err(|e| CryptoError::Decrypt(e.to_string()))?;
+        if k == 0 {
+            break;
+        }
+        // A write error here is a genuine output I/O fault (-> CryptoError::Io via `?`).
+        writer.write_all(&buf[..k])?;
+        total += k as u64;
+    }
+    Ok(total)
 }
 
 #[cfg(test)]
@@ -142,5 +155,22 @@ mod tests {
         // a valid-looking key parses:
         let (pubkey, _) = generate_identity();
         assert_eq!(parse_recipients(&[pubkey]).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn corrupted_ciphertext_is_decrypt_error() {
+        let (pubkey, secret) = generate_identity();
+        let recips = parse_recipients(&[pubkey]).unwrap();
+        let mut ct = Vec::new();
+        encrypt_stream(&recips, &b"hello world"[..], &mut ct).unwrap();
+        let n = ct.len();
+        ct[n - 1] ^= 0xff; // corrupt the final byte (auth tag)
+        let id = age::x25519::Identity::from_str(&secret).unwrap();
+        let mut out = Vec::new();
+        let err = decrypt_stream(&id, &ct[..], &mut out).unwrap_err();
+        assert!(
+            matches!(err, CryptoError::Decrypt(_)),
+            "expected Decrypt, got {err:?}"
+        );
     }
 }
