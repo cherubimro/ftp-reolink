@@ -126,7 +126,30 @@ build on a FreeBSD host of the **same major version** as the target with
 
 Verify the copied binary on the target with `reoftpd --help`.
 
+There is also a thin `Makefile` over Cargo (`make build`, `make build-musl
+ARCH=x86_64|aarch64`, `make test`, `make lint`, `sudo make install` —
+`make help` lists everything). Cargo remains the real build system; the
+Makefile just saves typing.
+
 ## Install
+
+### Automated (Linux/FreeBSD)
+
+`scripts/install.sh` does everything in this section in one idempotent, root
+run: installs the binary, creates the `reoftpd` system user and directories,
+drops in the example config (never overwriting an existing one, mode `0640`),
+and installs the systemd units if present. It does NOT generate certs, add
+cameras, or start the service — it prints those next steps.
+
+```sh
+make build                 # or: make build-musl ARCH=x86_64
+sudo ./scripts/install.sh  # set BIN=target/<triple>/release/reoftpd for a musl build
+```
+
+Then edit `/etc/reoftpd/reoftpd.toml` and follow the printed next steps
+(gencert → add-camera → nftables → enable the service).
+
+### Manual
 
 ```sh
 # 1. Install the binary
