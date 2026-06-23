@@ -1,0 +1,62 @@
+name: CI
+
+# Mirror of .gitlab-ci.yml for GitHub. fmt + clippy + tests on every push/PR;
+# a static x86_64-musl binary as an artifact, attached to a GitHub Release on tags.
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write # needed to create/upload Releases on tags
+
+env:
+  CARGO_TERM_COLOR: never
+
+# The toolchain (1.96.0) is pinned by rust-toolchain.toml, so rustup on the
+# runner installs it automatically (with clippy + rustfmt) on first cargo use.
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: tests
+        run: cargo test --locked
+
+  build-musl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+      - name: Add musl target
+        run: rustup target add x86_64-unknown-linux-musl
+      - name: Build fully-static binary
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - name: Stage and smoke-test
+        run: |
+          install -D -m0755 target/x86_64-unknown-linux-musl/release/reoftpd dist/reoftpd-x86_64-musl
+          ./dist/reoftpd-x86_64-musl --help
+          ldd dist/reoftpd-x86_64-musl || true   # expected: "not a dynamic executable"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reoftpd-x86_64-musl
+          path: dist/reoftpd-x86_64-musl
+          retention-days: 30
+      - name: Attach to GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/reoftpd-x86_64-musl \
+            --title "reoftpd ${GITHUB_REF_NAME}" \
+            --notes "Static x86_64-musl binary." --verify-tag \
+          || gh release upload "${GITHUB_REF_NAME}" dist/reoftpd-x86_64-musl --clobber

@@ -133,11 +133,12 @@ Makefile just saves typing.
 
 ## Continuous integration / prebuilt binaries
 
-`.gitlab-ci.yml` (for dev.cs.upt.ro) runs rustfmt + clippy + tests on every push,
-and builds a fully-static `x86_64-musl` binary as a downloadable job artifact —
-so you can grab a prebuilt binary instead of compiling on the VPS at all. Pushing
-a git tag (e.g. `v0.1.0`) additionally uploads that binary to the project's
-package registry and cuts a GitLab Release.
+CI runs on both hosts: **`.gitlab-ci.yml`** (dev.cs.upt.ro) and
+**`.github/workflows/ci.yml`** (GitHub). Both run rustfmt + clippy + tests on
+every push, and build a fully-static `x86_64-musl` binary as a downloadable
+artifact — so you can grab a prebuilt binary instead of compiling on the VPS at
+all. Pushing a git tag (e.g. `v0.1.0`) additionally cuts a Release with that
+binary attached (GitLab package registry / GitHub Release).
 
 ## Install
 
