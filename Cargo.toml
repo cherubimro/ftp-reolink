@@ -3,6 +3,10 @@ name = "reoftpd"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
+description = "Hardened append-only FTPS archive server for Reolink cameras"
+license = "AGPL-3.0-only"
+authors = ["Alin Anton"]
+repository = "https://github.com/cherubimro/ftp-reolink"
 
 [lib]
 name = "reoftpd"

@@ -461,3 +461,14 @@ age -d -i identity.txt clip.mp4.age > clip.mp4
   the external IP for passive-mode responses.  This is not currently
   configurable; bind to the LAN interface and ensure cameras connect from the
   same network segment to avoid NAT complications.
+
+## License
+
+Copyright © 2026 Alin Anton.
+
+reoftpd is free software licensed under the **GNU Affero General Public License,
+version 3** (AGPL-3.0-only) — see [LICENSE](LICENSE).  Because reoftpd is a
+network server, the AGPL's section 13 applies: if you run a **modified** version
+and make it available to users over a network, you must also offer those users
+the corresponding source code of your modified version.  Unmodified use imposes
+no such obligation.
