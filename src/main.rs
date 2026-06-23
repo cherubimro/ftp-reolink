@@ -206,28 +206,28 @@ async fn main() -> anyhow::Result<()> {
                     anyhow::anyhow!("no AGE-SECRET-KEY- line in {}", identity.display())
                 })?;
             let id = <age::x25519::Identity as std::str::FromStr>::from_str(key_line.trim())
-                .map_err(|e| anyhow::anyhow!("bad identity: {e}"))?;
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "identity file does not contain a valid AGE-SECRET-KEY-... value"
+                    )
+                })?;
             for input in &files {
                 let stem = input
                     .file_name()
                     .and_then(|n| n.to_str())
                     .and_then(|n| n.strip_suffix(".age"))
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("{} does not end in .age", input.display())
-                    })?;
+                    .ok_or_else(|| anyhow::anyhow!("{} does not end in .age", input.display()))?;
                 let out_path = match &output {
                     Some(dir) => dir.join(stem),
                     None => input.with_file_name(stem),
                 };
                 let rd = std::fs::File::open(input)?;
                 let wr = std::fs::File::create(&out_path)?;
-                reoftpd::crypto::decrypt_stream(&id, rd, wr)
-                    .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?;
-                eprintln!(
-                    "decrypted {} -> {}",
-                    input.display(),
-                    out_path.display()
-                );
+                if let Err(e) = reoftpd::crypto::decrypt_stream(&id, rd, wr) {
+                    let _ = std::fs::remove_file(&out_path); // don't leave a partial/empty file behind
+                    return Err(anyhow::anyhow!("{}: {e}", input.display()));
+                }
+                eprintln!("decrypted {} -> {}", input.display(), out_path.display());
             }
         }
     }

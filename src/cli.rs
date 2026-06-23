@@ -67,6 +67,7 @@ pub enum Command {
         identity: std::path::PathBuf,
         #[arg(long)]
         output: Option<std::path::PathBuf>,
+        /// One or more downloaded *.age files to decrypt
         #[arg(required = true)]
         files: Vec<std::path::PathBuf>,
     },
