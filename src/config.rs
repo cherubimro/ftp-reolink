@@ -23,6 +23,11 @@ impl std::fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 #[derive(Debug, Deserialize)]
+pub struct EncryptionCfg {
+    pub recipients: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Config {
     pub server: ServerCfg,
     pub archive: ArchiveCfg,
@@ -33,6 +38,8 @@ pub struct Config {
     pub group: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub viewer: Vec<ViewerCfg>,
+    #[serde(default)]
+    pub encryption: Option<EncryptionCfg>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -198,6 +205,15 @@ impl Config {
                 }
             }
         }
+        if let Some(enc) = &self.encryption {
+            if enc.recipients.is_empty() {
+                return Err(ConfigError::Invalid(
+                    "[encryption].recipients must be non-empty".into(),
+                ));
+            }
+            crate::crypto::parse_recipients(&enc.recipients)
+                .map_err(|e| ConfigError::Invalid(format!("[encryption]: {e}")))?;
+        }
         Ok(())
     }
 }
@@ -320,5 +336,29 @@ scope = ["outdoor"]
         );
         let c = parse_str(&with).unwrap();
         assert_eq!(c.limits.max_connections_per_account, Some(4));
+    }
+
+    #[test]
+    fn encryption_absent_is_none() {
+        let c = parse_str(SAMPLE).unwrap();
+        assert!(c.encryption.is_none());
+        c.validate().unwrap();
+    }
+
+    #[test]
+    fn encryption_with_valid_recipient_parses_and_validates() {
+        let (pubkey, _) = crate::crypto::generate_identity();
+        let s = format!("{SAMPLE}\n[encryption]\nrecipients = [\"{pubkey}\"]\n");
+        let c = parse_str(&s).unwrap();
+        assert_eq!(c.encryption.as_ref().unwrap().recipients.len(), 1);
+        c.validate().unwrap();
+    }
+
+    #[test]
+    fn encryption_rejects_empty_list_and_bad_key() {
+        let empty = format!("{SAMPLE}\n[encryption]\nrecipients = []\n");
+        assert!(parse_str(&empty).unwrap().validate().is_err());
+        let bad = format!("{SAMPLE}\n[encryption]\nrecipients = [\"not-a-key\"]\n");
+        assert!(parse_str(&bad).unwrap().validate().is_err());
     }
 }
