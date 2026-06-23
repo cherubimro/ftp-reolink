@@ -13,6 +13,8 @@ name = "reoftpd"
 path = "src/main.rs"
 
 [dependencies]
+age = "0.11"
+tokio-util = { version = "0.7", features = ["io"] }
 libunftp = "0.23"
 unftp-core = "0.1"
 anyhow = "1"

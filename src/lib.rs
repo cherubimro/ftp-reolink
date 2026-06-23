@@ -6,6 +6,7 @@ pub mod auth;
 pub mod backend;
 pub mod cli;
 pub mod config;
+pub mod crypto;
 pub mod hashing;
 pub mod limits;
 pub mod nftables;
