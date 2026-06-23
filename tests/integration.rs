@@ -382,3 +382,128 @@ upload_password_hash = "{cam_hash}"
     // Keep dir alive until end.
     drop(dir);
 }
+
+// ---------------------------------------------------------------------------
+// Encrypted upload test
+// ---------------------------------------------------------------------------
+
+/// Upload a known plaintext while encryption is configured; verify:
+///   1. The on-disk file is `<root>/front-door/clip.mp4.age` and its bytes are NOT the plaintext.
+///   2. No plaintext `<root>/front-door/clip.mp4` file exists.
+///   3. A viewer can RETR the `.age` ciphertext file.
+///   4. `reoftpd::crypto::decrypt_stream` with the test identity recovers the exact original bytes.
+#[test]
+fn encrypted_upload_is_ciphertext_on_disk_and_decryptable() {
+    // ---- 1. Generate an age keypair for this test ----
+    let (pubkey, secret) = reoftpd::crypto::generate_identity();
+
+    // ---- 2. Build config with [encryption] ----
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+
+    let cam_hash = reoftpd::hashing::hash_password("pw").expect("cam hash");
+    let viewer_hash = reoftpd::hashing::hash_password("vp").expect("viewer hash");
+
+    let ctrl = free_port();
+    let pasv_lo = free_port();
+    let pasv_hi = pasv_lo + 30;
+
+    let toml = format!(
+        r#"
+[server]
+listen = "127.0.0.1"
+port = {ctrl}
+passive_ports = [{pasv_lo}, {pasv_hi}]
+
+[archive]
+root = "{root}"
+retention_days = 30
+
+[limits]
+max_connections = 64
+max_connections_per_ip = 8
+new_conns_per_min_per_ip = 60
+idle_timeout_secs = 30
+min_transfer_rate_bytes_per_sec = 1
+failed_login_lockout = {{ max_attempts = 200, window_secs = 60, ban_secs = 60 }}
+
+[encryption]
+recipients = ["{pubkey}"]
+
+[[camera]]
+name = "front-door"
+upload_password_hash = "{cam_hash}"
+
+[[viewer]]
+name = "admin"
+password_hash = "{viewer_hash}"
+scope = "all"
+"#,
+        root = root.display()
+    );
+
+    let cfg = reoftpd::config::parse_str(&toml).expect("parse config");
+    cfg.validate().expect("validate config");
+
+    // ---- 3. Start the server on a background thread ----
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dummy_path = std::path::PathBuf::from("/dev/null");
+        let _ = rt.block_on(reoftpd::server::run(cfg, dummy_path));
+    });
+
+    wait_for_port(ctrl);
+
+    // ---- 4. Upload a known plaintext as the camera ----
+    let body = b"END TO END ARCHIVE BYTES";
+    {
+        let mut up = connect_ftp(ctrl);
+        up.login("front-door", "pw").expect("uploader login");
+        up.put_file("clip.mp4", &mut &body[..])
+            .expect("upload must succeed");
+        up.quit().ok();
+    }
+
+    // ---- 5. On-disk assertions: .age file exists; plaintext file does not ----
+    let archive_root = root;
+    let stored_path = archive_root.join("front-door/clip.mp4.age");
+    let stored = std::fs::read(&stored_path).expect("encrypted file must exist on disk");
+    assert_ne!(
+        stored.as_slice(),
+        &body[..],
+        "archive file must be ciphertext, not plaintext"
+    );
+    assert!(
+        !archive_root.join("front-door/clip.mp4").exists(),
+        "plaintext file must NOT exist on disk"
+    );
+
+    // ---- 6. Viewer downloads the .age ciphertext ----
+    let downloaded = {
+        let mut vw = connect_ftp(ctrl);
+        vw.login("admin", "vp").expect("viewer login");
+        let buf = vw
+            .retr_as_buffer("/front-door/clip.mp4.age")
+            .expect("viewer must be able to RETR the .age file");
+        vw.quit().ok();
+        buf.into_inner()
+    };
+    assert_ne!(
+        downloaded.as_slice(),
+        &body[..],
+        "downloaded bytes must be ciphertext"
+    );
+
+    // ---- 7. Decrypt with the test identity; expect exact original ----
+    let id = <age::x25519::Identity as std::str::FromStr>::from_str(&secret).unwrap();
+    let mut out = Vec::new();
+    reoftpd::crypto::decrypt_stream(&id, &downloaded[..], &mut out)
+        .expect("decrypt must succeed with the test identity");
+    assert_eq!(
+        out, body,
+        "decrypted bytes must equal the original plaintext"
+    );
+
+    // Keep dir alive until end.
+    drop(dir);
+}

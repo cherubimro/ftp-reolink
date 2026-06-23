@@ -142,3 +142,13 @@ name = "patio-view"
 # PLACEHOLDER — replace with the output of: reoftpd hash-password
 password_hash = "$argon2id$v=19$m=65536,t=2,p=1$DDDDDDDDDDDDDDDDDDDDDD$DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
 scope = ["outdoor"]
+
+# ---------------------------------------------------------------------------
+# [encryption] — optional encryption at rest (age X25519)
+#
+# Optional: encrypt every stored clip to one or more age (X25519) public keys.
+# The private key NEVER goes on this server; viewers decrypt downloaded *.age
+# files locally. Generate keys with `reoftpd genkey`. Changing this needs a restart.
+# [encryption]
+# recipients = ["age1exampleRecipientPublicKeyGoesHere", "age1backupKey"]
+# ---------------------------------------------------------------------------

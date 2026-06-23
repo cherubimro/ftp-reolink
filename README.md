@@ -352,6 +352,80 @@ If the reloaded config contains a parse or validation error, reoftpd logs the
 error and continues running with the previous configuration — a bad edit cannot
 take down the server.
 
+## Encryption at rest
+
+reoftpd can encrypt every uploaded clip on the fly using
+[age](https://age-encryption.org/) (X25519, ChaCha20-Poly1305).  This is
+opt-in and configured by adding an `[encryption]` section to the config.
+
+### What it protects
+
+A stolen VPS, stolen disks, or a later root compromise yields only ciphertext.
+The attacker cannot read any footage without the private key, which never lives
+on the server.
+
+**Honest caveat:** this is *encryption at rest*, not end-to-end encryption.
+The plaintext is briefly present in server RAM during an upload (the age stream
+cipher runs in the process while the camera sends data).  It is never written to
+disk in plaintext form.
+
+### ChaCha20-Poly1305 — no AES-NI required
+
+age uses ChaCha20-Poly1305, which is fast in software on any CPU.  This is a
+good fit for old or low-end VPS hardware that lacks AES-NI acceleration.
+
+### Generate a keypair
+
+```sh
+reoftpd genkey
+```
+
+This prints a public recipient string (`age1...`) and a secret identity string
+(`AGE-SECRET-KEY-...`).  **Keep the identity file off the server** — store it
+on the machine you use for viewing footage, or in a password manager.  If you
+lose the identity, archived footage is unrecoverable.
+
+Configure a second recipient as a backup (e.g. a key stored in cold storage)
+so you have a recovery path if the primary identity is lost.
+
+### Configure recipients
+
+Add an `[encryption]` section to `/etc/reoftpd/reoftpd.toml`:
+
+```toml
+[encryption]
+recipients = [
+    "age1primaryRecipientPublicKeyGoesHere",
+    "age1backupRecipientPublicKeyGoesHere",
+]
+```
+
+**Restart required** — unlike account changes, the recipient list cannot be
+hot-reloaded via SIGHUP.  Restart the service after any change to `[encryption]`:
+
+```sh
+systemctl restart reoftpd
+```
+
+### Effect on uploads and viewers
+
+- Every uploaded clip is stored as `<filename>.age` (e.g. `clip.mp4.age`).
+- Viewers download the `.age` ciphertext file and decrypt it locally.
+- `REST` (byte-range resume) is disabled for encrypted uploads — the entire
+  file must be uploaded in a single transfer.
+
+### Viewer decryption
+
+Once you have downloaded a `.age` file, decrypt it with either:
+
+```sh
+# Using the reoftpd CLI:
+reoftpd decrypt -i identity.txt clip.mp4.age
+
+# Or using the age reference tool directly:
+age -d -i identity.txt clip.mp4.age > clip.mp4
+```
+
 ## Known limitations
 
 - **No in-process privilege drop**: libunftp binds the listening port
