@@ -97,6 +97,10 @@ impl Authenticator for ReoAuth {
                 if acct.require_tls && !channel_is_secure(&creds.command_channel_security) {
                     return Err(AuthenticationError::new("TLS required for this account"));
                 }
+                // Enforce connection caps: reject when global or per-account limit is reached.
+                if self.sessions.at_capacity(username) {
+                    return Err(AuthenticationError::new("connection limit reached"));
+                }
                 Ok(Principal {
                     username: username.to_string(),
                 })
@@ -167,6 +171,16 @@ mod tests {
         Accounts { by_login }
     }
 
+    /// Construct a `Credentials` value with the given password and channel encryption state.
+    fn make_creds(password: &str, sec: ChannelEncryptionState) -> Credentials {
+        Credentials {
+            password: Some(password.to_string()),
+            certificate_chain: None,
+            source_ip: "127.0.0.1".parse().unwrap(),
+            command_channel_security: sec,
+        }
+    }
+
     // TDD RED phase evidence: these two tests were written before the implementation existed.
     // They test the pure credential-check core.
 
@@ -200,29 +214,19 @@ mod tests {
             sessions: unlimited_tracker(),
         };
 
-        let plaintext_creds = Credentials {
-            password: Some("pw".to_string()),
-            certificate_chain: None,
-            source_ip: "127.0.0.1".parse().unwrap(),
-            command_channel_security: ChannelEncryptionState::Plaintext,
-        };
-
-        let secure_creds = Credentials {
-            password: Some("pw".to_string()),
-            certificate_chain: None,
-            source_ip: "127.0.0.1".parse().unwrap(),
-            command_channel_security: ChannelEncryptionState::Tls,
-        };
-
         // require_tls=true + plaintext → authentication error
-        let result = auth.authenticate("cam", &plaintext_creds).await;
+        let result = auth
+            .authenticate("cam", &make_creds("pw", ChannelEncryptionState::Plaintext))
+            .await;
         assert!(
             result.is_err(),
             "expected Err for plaintext channel with require_tls=true"
         );
 
         // require_tls=true + TLS → success with correct username
-        let result = auth.authenticate("cam", &secure_creds).await;
+        let result = auth
+            .authenticate("cam", &make_creds("pw", ChannelEncryptionState::Tls))
+            .await;
         assert!(
             result.is_ok(),
             "expected Ok for TLS channel with require_tls=true, got: {:?}",
@@ -239,19 +243,48 @@ mod tests {
             sessions: unlimited_tracker(),
         };
 
-        let plaintext_creds = Credentials {
-            password: Some("pw".to_string()),
-            certificate_chain: None,
-            source_ip: "127.0.0.1".parse().unwrap(),
-            command_channel_security: ChannelEncryptionState::Plaintext,
-        };
-
-        let result = auth.authenticate("cam", &plaintext_creds).await;
+        let result = auth
+            .authenticate("cam", &make_creds("pw", ChannelEncryptionState::Plaintext))
+            .await;
         assert!(
             result.is_ok(),
             "expected Ok for plaintext with require_tls=false, got: {:?}",
             result.err()
         );
+    }
+
+    /// TDD RED: authenticate must return Err when global capacity is reached.
+    /// Written before the capacity gate was added to authenticate().
+    #[tokio::test]
+    async fn authenticate_rejected_when_at_global_capacity() {
+        let accts = accounts_with("cam", "pw", false);
+        let sessions = Arc::new(SessionTracker::new(1, None));
+        sessions.on_login("someone-else"); // global now 1 >= 1
+        let auth = ReoAuth {
+            accounts: swap(accts),
+            sessions,
+        };
+        let creds = make_creds("pw", ChannelEncryptionState::Plaintext);
+        let res = auth.authenticate("cam", &creds).await;
+        assert!(
+            res.is_err(),
+            "should be refused at capacity even with valid password"
+        );
+    }
+
+    /// TDD RED: authenticate must succeed when below capacity.
+    /// Written before the capacity gate was added to authenticate().
+    #[tokio::test]
+    async fn authenticate_ok_when_below_capacity() {
+        let accts = accounts_with("cam", "pw", false);
+        let sessions = Arc::new(SessionTracker::new(2, None));
+        sessions.on_login("someone-else"); // global 1 < 2
+        let auth = ReoAuth {
+            accounts: swap(accts),
+            sessions,
+        };
+        let creds = make_creds("pw", ChannelEncryptionState::Plaintext);
+        assert!(auth.authenticate("cam", &creds).await.is_ok());
     }
 
     /// ReoUser::home() returns Some for Uploader and None for Viewer.

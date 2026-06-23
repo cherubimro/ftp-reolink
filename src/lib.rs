@@ -9,6 +9,7 @@ pub mod config;
 pub mod hashing;
 pub mod limits;
 pub mod paths;
+pub mod presence;
 pub mod retention;
 pub mod server;
 pub mod tls;
