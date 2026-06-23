@@ -217,9 +217,8 @@ connection caps without dropping any active connections:
 # Using systemd (preferred)
 systemctl reload reoftpd
 
-# Or directly
-kill -HUP $(cat /var/run/reoftpd.pid)
-# or: kill -HUP <pid>
+# Or directly (use the PID from systemctl status or pgrep)
+kill -HUP <pid>
 ```
 
 **What reloads without a restart** (live SIGHUP):

@@ -32,7 +32,8 @@ impl SessionTracker {
     pub fn on_login(&self, username: &str) {
         let mut s = self.state.lock().unwrap();
         s.global = s.global.saturating_add(1);
-        *s.per_account.entry(username.to_string()).or_insert(0) += 1;
+        let c = s.per_account.entry(username.to_string()).or_insert(0);
+        *c = c.saturating_add(1);
     }
 
     pub fn on_logout(&self, username: &str) {
@@ -55,6 +56,26 @@ impl SessionTracker {
             Some(m) => s.per_account.get(username).copied().unwrap_or(0) >= m,
             None => false,
         }
+    }
+
+    /// Atomically admit a session if under both caps: on success increments the
+    /// global and per-account counts and returns true; at capacity, returns
+    /// false WITHOUT mutating. Checking and reserving under one lock closes the
+    /// check-then-increment race that a separate at_capacity()+on_login() had.
+    pub fn try_admit(&self, username: &str) -> bool {
+        let mut s = self.state.lock().unwrap();
+        if s.global >= s.max_global {
+            return false;
+        }
+        if let Some(m) = s.max_per_account {
+            if s.per_account.get(username).copied().unwrap_or(0) >= m {
+                return false;
+            }
+        }
+        s.global = s.global.saturating_add(1);
+        let c = s.per_account.entry(username.to_string()).or_insert(0);
+        *c = c.saturating_add(1);
+        true
     }
 
     pub fn set_limits(&self, max_global: u32, max_per_account: Option<u32>) {
@@ -113,5 +134,32 @@ mod tests {
         assert!(t.at_capacity("b")); // global 1 >= 1
         t.set_limits(2, None);
         assert!(!t.at_capacity("b")); // global 1 < 2
+    }
+
+    #[test]
+    fn try_admit_increments_on_success_and_blocks_at_cap() {
+        let t = SessionTracker::new(1, None);
+        assert!(t.try_admit("a")); // 0 -> 1, admitted
+        assert!(!t.try_admit("b")); // global 1 >= 1, refused
+        t.on_logout("a"); // 1 -> 0
+        assert!(t.try_admit("b")); // now admitted
+    }
+
+    #[test]
+    fn try_admit_does_not_increment_when_refused() {
+        let t = SessionTracker::new(1, None);
+        assert!(t.try_admit("a"));
+        assert!(!t.try_admit("a")); // refused
+        assert!(!t.try_admit("a")); // still refused; the refusals must not have incremented
+        t.on_logout("a");
+        assert!(t.try_admit("a")); // exactly one slot freed -> admit succeeds
+    }
+
+    #[test]
+    fn try_admit_respects_per_account_cap() {
+        let t = SessionTracker::new(100, Some(1));
+        assert!(t.try_admit("a"));
+        assert!(!t.try_admit("a")); // per-account cap 1
+        assert!(t.try_admit("b")); // different account ok
     }
 }

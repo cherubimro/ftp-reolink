@@ -97,8 +97,9 @@ impl Authenticator for ReoAuth {
                 if acct.require_tls && !channel_is_secure(&creds.command_channel_security) {
                     return Err(AuthenticationError::new("TLS required for this account"));
                 }
-                // Enforce connection caps: reject when global or per-account limit is reached.
-                if self.sessions.at_capacity(username) {
+                // Enforce connection caps: atomically admit or reject — no race between
+                // check and increment.
+                if !self.sessions.try_admit(username) {
                     return Err(AuthenticationError::new("connection limit reached"));
                 }
                 Ok(Principal {
