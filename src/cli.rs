@@ -42,6 +42,11 @@ pub enum Command {
     },
     /// Hash a password and print the PHC string.
     HashPassword,
+    /// Print an nftables ruleset (per-IP + global connection caps) from the config
+    Nftables {
+        #[arg(long, default_value = "/etc/reoftpd/reoftpd.toml")]
+        config: std::path::PathBuf,
+    },
     /// Generate a self-signed TLS certificate and key.
     Gencert {
         #[arg(long, num_args = 1..)]

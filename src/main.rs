@@ -125,6 +125,14 @@ async fn main() -> anyhow::Result<()> {
         }
 
         // ------------------------------------------------------------------
+        // nftables: print nftables ruleset enforcing connection caps.
+        // ------------------------------------------------------------------
+        Command::Nftables { config } => {
+            let cfg = reoftpd::config::load(&config)?;
+            print!("{}", reoftpd::nftables::render_nftables(&cfg));
+        }
+
+        // ------------------------------------------------------------------
         // gencert: generate self-signed cert + key, write files.
         // ------------------------------------------------------------------
         Command::Gencert {

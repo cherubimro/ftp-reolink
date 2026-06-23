@@ -8,6 +8,7 @@ pub mod cli;
 pub mod config;
 pub mod hashing;
 pub mod limits;
+pub mod nftables;
 pub mod paths;
 pub mod presence;
 pub mod retention;
