@@ -11,6 +11,8 @@
 //! in the sibling crate `unftp-core 0.1`, which is used directly here.
 use crate::account::{Account, Accounts, Role};
 use crate::hashing::verify_password;
+use crate::limits::SessionTracker;
+use arc_swap::ArcSwap;
 use std::sync::Arc;
 use unftp_core::auth::{
     AuthenticationError, Authenticator, ChannelEncryptionState, Credentials, Principal, UserDetail,
@@ -75,7 +77,8 @@ impl UserDetail for ReoUser {
 /// libunftp `Authenticator` backed by argon2id accounts with optional per-account TLS enforcement.
 #[derive(Debug)]
 pub struct ReoAuth {
-    pub accounts: Arc<Accounts>,
+    pub accounts: Arc<ArcSwap<Accounts>>,
+    pub sessions: Arc<SessionTracker>,
 }
 
 #[async_trait::async_trait]
@@ -85,8 +88,9 @@ impl Authenticator for ReoAuth {
         username: &str,
         creds: &Credentials,
     ) -> Result<Principal, AuthenticationError> {
+        let accts = self.accounts.load_full();
         let password = creds.password.as_deref().unwrap_or("");
-        match check_credentials(&self.accounts, username, password) {
+        match check_credentials(&accts, username, password) {
             Some(acct) => {
                 // Enforce per-account require_tls: reject on a plaintext command
                 // channel for accounts that mandate TLS.
@@ -105,7 +109,7 @@ impl Authenticator for ReoAuth {
 /// libunftp `UserDetailProvider` that maps a `Principal` username → `ReoUser`.
 #[derive(Debug)]
 pub struct ReoUserProvider {
-    pub accounts: Arc<Accounts>,
+    pub accounts: Arc<ArcSwap<Accounts>>,
 }
 
 #[async_trait::async_trait]
@@ -113,7 +117,8 @@ impl UserDetailProvider for ReoUserProvider {
     type User = ReoUser;
 
     async fn provide_user_detail(&self, principal: &Principal) -> Result<ReoUser, UserDetailError> {
-        match self.accounts.get(&principal.username) {
+        let accts = self.accounts.load_full();
+        match accts.get(&principal.username) {
             Some(a) => Ok(ReoUser {
                 login: a.username.clone(),
                 role: a.role.clone(),
@@ -131,10 +136,20 @@ mod tests {
     use super::*;
     use crate::account::{Account, Accounts, Role};
     use crate::hashing::hash_password;
+    use crate::limits::SessionTracker;
+    use arc_swap::ArcSwap;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::sync::Arc;
     use unftp_core::auth::{ChannelEncryptionState, Credentials, Principal, UserDetailProvider};
+
+    fn swap(accts: Accounts) -> Arc<ArcSwap<Accounts>> {
+        Arc::new(ArcSwap::from_pointee(accts))
+    }
+
+    fn unlimited_tracker() -> Arc<SessionTracker> {
+        Arc::new(SessionTracker::new(u32::MAX, None))
+    }
 
     fn accounts_with(login: &str, plain: &str, require_tls: bool) -> Accounts {
         let mut by_login = BTreeMap::new();
@@ -181,7 +196,8 @@ mod tests {
     #[tokio::test]
     async fn require_tls_rejects_plaintext_accepts_secure() {
         let auth = ReoAuth {
-            accounts: Arc::new(accounts_with("cam", "pw", true)),
+            accounts: swap(accounts_with("cam", "pw", true)),
+            sessions: unlimited_tracker(),
         };
 
         let plaintext_creds = Credentials {
@@ -219,7 +235,8 @@ mod tests {
     #[tokio::test]
     async fn no_require_tls_allows_plaintext() {
         let auth = ReoAuth {
-            accounts: Arc::new(accounts_with("cam", "pw", false)),
+            accounts: swap(accounts_with("cam", "pw", false)),
+            sessions: unlimited_tracker(),
         };
 
         let plaintext_creds = Credentials {
@@ -268,7 +285,7 @@ mod tests {
     #[tokio::test]
     async fn user_detail_provider_known_and_unknown() {
         let provider = ReoUserProvider {
-            accounts: Arc::new(accounts_with("cam", "pw", false)),
+            accounts: swap(accounts_with("cam", "pw", false)),
         };
         let principal = Principal {
             username: "cam".to_string(),

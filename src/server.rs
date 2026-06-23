@@ -65,9 +65,14 @@ pub fn build_server(
     cfg: &Config,
     accounts: Accounts,
 ) -> anyhow::Result<libunftp::Server<ReoBackend, ReoUser>> {
-    let accounts = Arc::new(accounts);
+    let accounts = Arc::new(arc_swap::ArcSwap::from_pointee(accounts));
+    let tracker = Arc::new(crate::limits::SessionTracker::new(
+        cfg.limits.max_connections,
+        cfg.limits.max_connections_per_account,
+    ));
     let auth = Arc::new(ReoAuth {
         accounts: accounts.clone(),
+        sessions: tracker,
     });
     let provider = Arc::new(ReoUserProvider {
         accounts: accounts.clone(),
