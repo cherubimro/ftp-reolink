@@ -56,6 +56,20 @@ pub enum Command {
         #[arg(long)]
         key: PathBuf,
     },
+    /// Generate an age keypair (public recipient -> config; private identity -> off-server)
+    Genkey {
+        #[arg(long)]
+        output: Option<std::path::PathBuf>,
+    },
+    /// Decrypt downloaded *.age files locally with your age identity
+    Decrypt {
+        #[arg(long)]
+        identity: std::path::PathBuf,
+        #[arg(long)]
+        output: Option<std::path::PathBuf>,
+        #[arg(required = true)]
+        files: Vec<std::path::PathBuf>,
+    },
 }
 
 /// Render a `[[camera]]` TOML snippet suitable for appending to the config file.

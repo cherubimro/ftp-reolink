@@ -149,6 +149,87 @@ async fn main() -> anyhow::Result<()> {
                 key.display()
             );
         }
+
+        // ------------------------------------------------------------------
+        // genkey: generate age keypair, write identity file (mode 0600).
+        // ------------------------------------------------------------------
+        Command::Genkey { output } => {
+            let (public, secret) = reoftpd::crypto::generate_identity();
+            match output {
+                Some(path) => {
+                    use std::io::Write as _;
+                    #[cfg(unix)]
+                    let mut f = {
+                        use std::os::unix::fs::OpenOptionsExt as _;
+                        std::fs::OpenOptions::new()
+                            .write(true)
+                            .create(true)
+                            .truncate(true)
+                            .mode(0o600)
+                            .open(&path)?
+                    };
+                    #[cfg(not(unix))]
+                    let mut f = std::fs::File::create(&path)?;
+                    writeln!(f, "{secret}")?;
+                    eprintln!(
+                        "Private identity written to {} (mode 0600). KEEP IT OFF THE SERVER.",
+                        path.display()
+                    );
+                }
+                None => {
+                    eprintln!(
+                        "# KEEP THE SECRET BELOW OFF THE SERVER. Losing it = unrecoverable archive."
+                    );
+                    println!("{secret}");
+                }
+            }
+            eprintln!(
+                "Add this PUBLIC recipient to [encryption].recipients (and keep a backup key):"
+            );
+            println!("{public}");
+        }
+
+        // ------------------------------------------------------------------
+        // decrypt: decrypt *.age files locally with an age identity file.
+        // ------------------------------------------------------------------
+        Command::Decrypt {
+            identity,
+            output,
+            files,
+        } => {
+            let id_text = std::fs::read_to_string(&identity)?;
+            // Identity files may contain comment lines (starting with '#'); pick the key line.
+            let key_line = id_text
+                .lines()
+                .find(|l| l.trim_start().starts_with("AGE-SECRET-KEY-"))
+                .ok_or_else(|| {
+                    anyhow::anyhow!("no AGE-SECRET-KEY- line in {}", identity.display())
+                })?;
+            let id = <age::x25519::Identity as std::str::FromStr>::from_str(key_line.trim())
+                .map_err(|e| anyhow::anyhow!("bad identity: {e}"))?;
+            for input in &files {
+                let stem = input
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(|n| n.strip_suffix(".age"))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("{} does not end in .age", input.display())
+                    })?;
+                let out_path = match &output {
+                    Some(dir) => dir.join(stem),
+                    None => input.with_file_name(stem),
+                };
+                let rd = std::fs::File::open(input)?;
+                let wr = std::fs::File::create(&out_path)?;
+                reoftpd::crypto::decrypt_stream(&id, rd, wr)
+                    .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?;
+                eprintln!(
+                    "decrypted {} -> {}",
+                    input.display(),
+                    out_path.display()
+                );
+            }
+        }
     }
 
     Ok(())
