@@ -30,6 +30,17 @@ access.
 - **Opportunistic FTPS**: all connections may upgrade to TLS via `AUTH TLS`;
   individual camera accounts can set `require_tls = true` to make TLS
   mandatory.
+- **Encryption at rest** (optional): with `[encryption].recipients` set, every
+  clip is age-encrypted *on the fly* to your public key(s) and stored as
+  `*.age` — plaintext is never written to disk and only your off-server private
+  key can decrypt.  See [Encryption at rest](#encryption-at-rest).
+- **Concurrent-session caps**: global and per-account limits on simultaneous
+  logged-in sessions (`max_connections`, `max_connections_per_account`),
+  enforced in-process; per-IP connection caps via the generated nftables rules
+  (`reoftpd nftables`).
+- **Live config reload**: `SIGHUP` reloads cameras, viewers, groups, and caps
+  without dropping connections (a bad edit is logged and ignored); see
+  [Live config reload](#live-config-reload).
 
 ## Get the code
 
