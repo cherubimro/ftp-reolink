@@ -1,10 +1,20 @@
-# reoftpd — append-only FTPS archive for Reolink cameras
+# reoftpd — append-only FTPS archive for IP cameras
 
-`reoftpd` is a hardened FTP server that lets Reolink cameras push footage to a
+`reoftpd` is a hardened FTP/FTPS server that lets IP cameras push footage to a
 local NAS or server while preventing them from reading, overwriting, deleting,
 or renaming any file they have uploaded.  Separate read-only viewer accounts
 let authorised users browse and download footage without gaining any write
 access.
+
+**Camera compatibility.** reoftpd works with any camera that can upload over
+FTP or FTPS — Reolink is the primary tested target, but many CCTV brands
+(Hikvision, Dahua, Amcrest, and others) can push recordings to an FTP server,
+so reoftpd is a broadly applicable archival target.  FTP/FTPS is also one of the
+few camera upload protocols that is **authenticated per account**: some cameras
+can instead write to a local NFS share (e.g. Hikvision), but NFS exports are
+typically host/IP-trusted rather than user-authenticated, so a stolen or spoofed
+camera on the LAN could read and delete the entire share — exactly what
+reoftpd's per-account, append-only model prevents.
 
 ## Security guarantees
 
@@ -249,10 +259,21 @@ nft add rule inet filter input tcp dport 21 accept
 nft add rule inet filter input tcp dport 50000-50100 accept
 ```
 
-**Bind to a LAN or VPN interface — do NOT expose FTP to the public internet.**
-FTP is not designed for hostile networks.  The strongest mitigation is binding
-`listen` in `[server]` to a private IP (e.g. `192.168.1.10`) and ensuring the
-port is not reachable from outside your network.
+**Prefer a LAN or VPN; if the camera can't, require FTPS.**  The strongest
+mitigation is binding `listen` in `[server]` to a private IP (e.g.
+`192.168.1.10`) on a LAN or VPN so the port is never reachable from the public
+internet.  Plain FTP carries credentials and data in clear text and must never
+cross an untrusted network.
+
+But many cameras — especially **GSM/4G/LTE cellular cameras** — have no VPN
+capability and can only reach the server over the public internet.  That is
+exactly why reoftpd supports **FTPS**: set `require_tls = true` on those camera
+accounts so their control and data channels are TLS-encrypted, install a
+certificate (`reoftpd gencert`), and layer the connection caps plus firewall
+rate-limiting (`reoftpd nftables`) on top.  Combined with append-only storage
+and optional at-rest encryption, an internet-exposed **FTPS** endpoint is a
+defensible deployment when a private network isn't possible — the rule is never
+expose *plain* FTP, not never expose the service at all.
 
 ### In-process connection caps (enforced server-side)
 
