@@ -11,10 +11,13 @@ FTP or FTPS — Reolink is the primary tested target, but many CCTV brands
 (Hikvision, Dahua, Amcrest, and others) can push recordings to an FTP server,
 so reoftpd is a broadly applicable archival target.  FTP/FTPS is also one of the
 few camera upload protocols that is **authenticated per account**: some cameras
-can instead write to a local NFS share (e.g. Hikvision), but NFS exports are
-typically host/IP-trusted rather than user-authenticated, so a stolen or spoofed
-camera on the LAN could read and delete the entire share — exactly what
-reoftpd's per-account, append-only model prevents.
+can instead write to a local NFS share (e.g. Hikvision), but the NFS *client* in
+these cameras speaks only `AUTH_SYS` — you configure a server address and path
+with no per-user credentials, and the export trusts the host/IP.  (NFSv4 *can*
+do real per-user authentication via `RPCSEC_GSS`/Kerberos, but CCTV NFS clients
+like Hikvision's don't implement it — there's no realm/keytab configuration on
+the device.)  So a stolen or spoofed camera on the LAN could read and delete the
+entire share — exactly what reoftpd's per-account, append-only model prevents.
 
 ## Security guarantees
 
