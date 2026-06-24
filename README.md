@@ -9,15 +9,18 @@ access.
 **Camera compatibility.** reoftpd works with any camera that can upload over
 FTP or FTPS — Reolink is the primary tested target, but many CCTV brands
 (Hikvision, Dahua, Amcrest, and others) can push recordings to an FTP server,
-so reoftpd is a broadly applicable archival target.  FTP/FTPS is also one of the
-few camera upload protocols that is **authenticated per account**: some cameras
-can instead write to a local NFS share (e.g. Hikvision), but the NFS *client* in
-these cameras speaks only `AUTH_SYS` — you configure a server address and path
-with no per-user credentials, and the export trusts the host/IP.  (NFSv4 *can*
-do real per-user authentication via `RPCSEC_GSS`/Kerberos, but CCTV NFS clients
-like Hikvision's don't implement it — there's no realm/keytab configuration on
-the device.)  So a stolen or spoofed camera on the LAN could read and delete the
-entire share — exactly what reoftpd's per-account, append-only model prevents.
+so reoftpd is a broadly applicable archival target.  **Why FTP rather than a plain NAS share?**  Cameras can also write recordings to
+network shares — Hikvision, for example, supports both NFS and SMB/CIFS
+(*Net HDD*).  But those are ordinary **read-write** shares.  NFS, as these
+cameras use it, is host-trust `AUTH_SYS` with no per-user login at all (NFSv4 +
+`RPCSEC_GSS`/Kerberos *can* authenticate per user, but CCTV NFS clients don't
+implement it).  SMB/CIFS *does* authenticate with a username and password — but
+an authenticated camera, or anyone holding its credentials, can still
+**overwrite and delete** its own footage, and Hikvision's SMB frequently
+requires the deprecated, insecure **SMBv1** dialect.  reoftpd's value is not
+merely authentication (SMB has that too) but **append-only enforcement**: once a
+clip is uploaded it cannot be overwritten, deleted, renamed, or even read back
+over the same credentials — the tamper-proofing a plain share cannot provide.
 
 ## Security guarantees
 
