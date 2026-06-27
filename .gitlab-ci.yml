@@ -15,6 +15,8 @@ stages:
 variables:
   CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
   CARGO_TERM_COLOR: "never"
+  # Make cargo retry transient crates.io/network hiccups instead of failing the job.
+  CARGO_NET_RETRY: "5"
   # Tool image for the tag-release job (NOT where the repo lives — the repo is on
   # this GitLab instance). It is pulled from gitlab.com's public registry by
   # default; if this instance's runner cannot reach gitlab.com, override
@@ -30,6 +32,14 @@ workflow:
 
 default:
   image: rust:1.96
+  # Auto-retry on infrastructure flakes (runner died, timeout) — NOT on real
+  # compile/test failures, so genuine breakage still surfaces immediately.
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
   cache:
     key: "cargo-$CI_COMMIT_REF_SLUG"
     paths:
@@ -48,7 +58,10 @@ check:
 build:musl-x86_64:
   stage: build
   script:
-    - apt-get update && apt-get install -y --no-install-recommends musl-tools
+    # -o Acquire::Retries makes apt itself retry transient mirror/DNS failures
+    # (the most likely cause of the occasional musl-build flake on this runner).
+    - apt-get -o Acquire::Retries=3 update
+    - apt-get -o Acquire::Retries=3 install -y --no-install-recommends musl-tools
     - rustup target add x86_64-unknown-linux-musl
     - cargo build --release --locked --target x86_64-unknown-linux-musl
     - install -D -m0755 target/x86_64-unknown-linux-musl/release/reoftpd dist/reoftpd-x86_64-musl
