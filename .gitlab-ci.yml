@@ -55,8 +55,13 @@ check:
     - cargo test --locked
 
 # Fully-static x86_64 Linux binary — runs on any glibc version, however old.
+# allow_failure: this self-hosted runner has a flaky network and occasionally
+# fails to fetch musl-tools/crates; the artifact is redundant (GitHub Actions
+# builds the identical binary reliably), so a transient flake here must not mark
+# the whole pipeline red. Real code breakage is still gated by the `check` stage.
 build:musl-x86_64:
   stage: build
+  allow_failure: true
   script:
     # -o Acquire::Retries makes apt itself retry transient mirror/DNS failures
     # (the most likely cause of the occasional musl-build flake on this runner).
