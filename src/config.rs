@@ -47,6 +47,12 @@ pub struct ServerCfg {
     pub listen: String,
     pub port: u16,
     pub passive_ports: [u16; 2],
+    /// IP address or DNS name advertised in PASV replies. Required when the
+    /// server sits behind NAT (e.g. a DMZ host): set it to the public address
+    /// so remote clients connect back to a reachable endpoint. When unset,
+    /// libunftp advertises the control connection's local address.
+    #[serde(default)]
+    pub passive_host: Option<String>,
     #[serde(default)]
     pub tls_cert: Option<PathBuf>,
     #[serde(default)]
@@ -266,6 +272,22 @@ scope = ["outdoor"]
         assert!(matches!(c.viewer[0].scope, Scope::All));
         assert!(matches!(&c.viewer[1].scope, Scope::List(v) if v == &vec!["outdoor".to_string()]));
         c.validate().unwrap();
+    }
+
+    #[test]
+    fn parses_passive_host_when_present() {
+        let with = SAMPLE.replace(
+            "passive_ports = [50000, 50100]",
+            "passive_ports = [50000, 50100]\npassive_host = \"198.51.100.7\"",
+        );
+        let c = parse_str(&with).unwrap();
+        assert_eq!(c.server.passive_host.as_deref(), Some("198.51.100.7"));
+    }
+
+    #[test]
+    fn passive_host_defaults_to_none_when_absent() {
+        let c = parse_str(SAMPLE).unwrap();
+        assert!(c.server.passive_host.is_none());
     }
 
     #[test]

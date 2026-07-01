@@ -98,6 +98,13 @@ pub fn build_server(
         FailedLoginsBlock::UserAndIP,
     ));
 
+    // Advertise a fixed IP/DNS in PASV replies when configured (required behind
+    // NAT/DMZ so remote clients dial back a reachable address). libunftp's
+    // `From<&str>` maps a parseable IPv4 to `PassiveHost::Ip`, else `PassiveHost::Dns`.
+    if let Some(host) = cfg.server.passive_host.as_deref() {
+        builder = builder.passive_host(host);
+    }
+
     if let (Some(cert), Some(key)) = (cfg.server.tls_cert.clone(), cfg.server.tls_key.clone()) {
         builder = builder.ftps(cert, key);
     }
