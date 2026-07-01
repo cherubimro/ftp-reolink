@@ -205,6 +205,34 @@ cp config/reoftpd.example.toml /etc/reoftpd/reoftpd.toml
 # Edit /etc/reoftpd/reoftpd.toml before starting the service.
 ```
 
+### Run as a service
+
+**Linux (systemd)** — install the units from `packaging/` (the automated
+installer does this for you), then:
+
+```sh
+sudo install -m0644 packaging/reoftpd.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now reoftpd
+```
+
+**FreeBSD (rc.d)** — `reoftpd` has no in-process privilege drop, so `daemon(8)`
+runs it directly as the `reoftpd` user (root supervises, then drops via `-u`).
+Install `packaging/reoftpd.rc`:
+
+```sh
+install -o root -g wheel -m0555 packaging/reoftpd.rc /usr/local/etc/rc.d/reoftpd
+sysrc reoftpd_enable=YES
+service reoftpd start
+```
+
+It supervises with auto-restart and logs to `/var/log/reoftpd.log`. An
+unprivileged user cannot bind port 21, so either use a high `port` (e.g. `2121`)
+in the config or grant the privileged port with `mac_portacl`. Override defaults
+in `/etc/rc.conf` if needed: `reoftpd_config`, `reoftpd_runas`, `reoftpd_logfile`
+(note the run-as knob is deliberately **not** `reoftpd_user` — that name is
+reserved by `rc.subr` and would run `daemon` itself as that user, breaking `-u`).
+
 ## Generate a TLS certificate
 
 A self-signed certificate is sufficient for Reolink cameras on a LAN.
@@ -280,6 +308,28 @@ rate-limiting (`reoftpd nftables`) on top.  Combined with append-only storage
 and optional at-rest encryption, an internet-exposed **FTPS** endpoint is a
 defensible deployment when a private network isn't possible — the rule is never
 expose *plain* FTP, not never expose the service at all.
+
+### Passive mode behind NAT / a DMZ host
+
+Passive FTP has the server tell the client which address to open the data
+connection to. When the server sits behind NAT (e.g. a DMZ host with a private
+`listen` address), that would advertise an unroutable private IP and every data
+transfer would hang. Set `passive_host` in `[server]` to the **public** IP — or
+a DNS name, resolved server-side — so PASV replies point at a reachable
+endpoint:
+
+```toml
+[server]
+listen        = "0.0.0.0"          # bound locally (only the private IP exists here)
+passive_host  = "203.0.113.7"      # advertised to clients (the public/DMZ IP)
+passive_ports = [50000, 50100]
+```
+
+Forward the control port and the whole `passive_ports` range to the box. On a
+host with a directly routable public IP `passive_host` is optional — leave it
+unset and the control-connection address is used — but setting it explicitly is
+harmless. (FTP passive replies are IPv4-only, so `passive_host` takes an IPv4
+address or a name that resolves to one.)
 
 ### In-process connection caps (enforced server-side)
 

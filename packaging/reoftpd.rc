@@ -1,0 +1,31 @@
+#!/bin/sh
+#
+# PROVIDE: reoftpd
+# REQUIRE: LOGIN NETWORKING
+# KEYWORD: shutdown
+#
+# reoftpd_enable (bool): Set to YES to enable the reoftpd FTPS archive server.
+# reoftpd_config (path): Config file (default /usr/local/etc/reoftpd/reoftpd.toml).
+# reoftpd_runas  (str):  User to run the daemon as (default reoftpd).
+#   NB: intentionally NOT named reoftpd_user — ${name}_user is reserved by
+#   rc.subr and would make rc run daemon(8) itself as that user, breaking -u.
+
+. /etc/rc.subr
+
+name=reoftpd
+rcvar=reoftpd_enable
+load_rc_config $name
+
+: ${reoftpd_enable:="NO"}
+: ${reoftpd_runas:="reoftpd"}
+: ${reoftpd_config:="/usr/local/etc/reoftpd/reoftpd.toml"}
+: ${reoftpd_logfile:="/var/log/reoftpd.log"}
+
+pidfile="/var/run/reoftpd.pid"
+command="/usr/sbin/daemon"
+# daemon runs as root: writes pidfile (/var/run) + logfile (/var/log), then
+# -u drops the child to the service user. -f background, -r restart-on-crash.
+command_args="-f -r -P ${pidfile} -o ${reoftpd_logfile} -u ${reoftpd_runas} \
+  /usr/local/bin/reoftpd serve --config ${reoftpd_config}"
+
+run_rc_command "$1"
