@@ -53,6 +53,11 @@ pub struct ServerCfg {
     /// libunftp advertises the control connection's local address.
     #[serde(default)]
     pub passive_host: Option<String>,
+    /// FTP greeting banner sent on connect. When unset, libunftp's default
+    /// ("Welcome to the libunftp FTP server") is used. Set a neutral value on
+    /// a public server to avoid advertising the server software.
+    #[serde(default)]
+    pub greeting: Option<String>,
     #[serde(default)]
     pub tls_cert: Option<PathBuf>,
     #[serde(default)]
@@ -288,6 +293,22 @@ scope = ["outdoor"]
     fn passive_host_defaults_to_none_when_absent() {
         let c = parse_str(SAMPLE).unwrap();
         assert!(c.server.passive_host.is_none());
+    }
+
+    #[test]
+    fn parses_greeting_when_present() {
+        let with = SAMPLE.replace(
+            "passive_ports = [50000, 50100]",
+            "passive_ports = [50000, 50100]\ngreeting = \"FTP\"",
+        );
+        let c = parse_str(&with).unwrap();
+        assert_eq!(c.server.greeting.as_deref(), Some("FTP"));
+    }
+
+    #[test]
+    fn greeting_defaults_to_none_when_absent() {
+        let c = parse_str(SAMPLE).unwrap();
+        assert!(c.server.greeting.is_none());
     }
 
     #[test]

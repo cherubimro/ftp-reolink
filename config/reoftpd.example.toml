@@ -43,6 +43,11 @@ passive_ports = [50000, 50100]
 # public IP changes).  The passive_ports range must be reachable at this address.
 # passive_host = "203.0.113.7"
 
+# FTP greeting banner sent on connect. Unset uses libunftp's default
+# ("Welcome to the libunftp FTP server"). On a public server prefer a neutral
+# value so you don't advertise the server software to scanners.
+# greeting = "FTP"
+
 # TLS certificate and private key (PEM).  Required for FTPS (AUTH TLS).
 # Generate a self-signed cert with:
 #   reoftpd gencert --hostnames nvr.lan 192.168.1.10 \

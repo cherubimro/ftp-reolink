@@ -105,6 +105,12 @@ pub fn build_server(
         builder = builder.passive_host(host);
     }
 
+    // Custom greeting banner. libunftp takes a &'static str; the banner is
+    // process-lifetime config, so a one-time leak is the intended pattern.
+    if let Some(greeting) = &cfg.server.greeting {
+        builder = builder.greeting(Box::leak(greeting.clone().into_boxed_str()));
+    }
+
     if let (Some(cert), Some(key)) = (cfg.server.tls_cert.clone(), cfg.server.tls_key.clone()) {
         builder = builder.ftps(cert, key);
     }
