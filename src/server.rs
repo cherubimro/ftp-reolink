@@ -202,6 +202,26 @@ pub async fn run(cfg: Config, config_path: PathBuf) -> anyhow::Result<()> {
         });
     }
 
+    // Session reaper: reclaim per-account/global slots leaked by unclean
+    // disconnects. libunftp only emits LoggedOut on a clean control-channel
+    // close, so an abrupt RST (common with FTPS data-channel teardown) never
+    // decrements the count; without this, caps would slowly wedge shut.
+    {
+        let tracker = tracker.clone();
+        let ttl = Duration::from_secs(crate::limits::SESSION_TTL_SECS);
+        tokio::spawn(async move {
+            let mut tick =
+                tokio::time::interval(Duration::from_secs(crate::limits::REAP_INTERVAL_SECS));
+            loop {
+                tick.tick().await;
+                let n = tracker.reap(ttl);
+                if n > 0 {
+                    tracing::info!("session reaper reclaimed {n} stale slot(s)");
+                }
+            }
+        });
+    }
+
     let server = build_server(&cfg, accounts, tracker)?;
     let addr = format!("{}:{}", cfg.server.listen, cfg.server.port);
     server

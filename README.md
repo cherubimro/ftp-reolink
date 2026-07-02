@@ -347,6 +347,14 @@ The following limits are checked in-process and are fully enforced at login time
   (`ban_secs` is parsed but not yet honored — see the Security guarantees
   section).
 
+Session counts are admitted at the auth gate and released on libunftp's
+`LoggedOut` event. Because libunftp only emits `LoggedOut` on a *clean* control
+close (not on an abrupt reset — which FTPS clients can cause during data-channel
+teardown), a background **reaper** reclaims any session slot older than
+`SESSION_TTL_SECS` (5 min) so the caps can never wedge shut on leaked slots.
+Reaping a still-live session is harmless — it frees the slot early while the
+transfer keeps running.
+
 ### Per-IP rate limits (firewall via nftables)
 
 `max_connections_per_ip` and `new_conns_per_min_per_ip` are enforced at the
